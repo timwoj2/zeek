@@ -11,10 +11,15 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace zeek::detail {
+
+
+std::string join(std::span<const std::string> args, const std::string& sep = " ");
 
 class ZeekClusterConfig;
 
@@ -40,11 +45,9 @@ public:
     /**
      * Get the CPU affinity for index \a index (1-based).
      */
-    std::string AffinityFor(unsigned int index) const {
-        if ( index == 0 ) {
-            std::fprintf(stderr, "index starts at 1\n");
-            abort();
-        }
+    std::string AffinityFor(int index) const {
+        if ( index <= 0 )
+            throw std::logic_error("bad index: " + std::to_string(index));
 
         if ( cpus.empty() )
             return "";
@@ -65,6 +68,185 @@ private:
 };
 
 /**
+ * Environment variable.
+ */
+class EnvVar {
+public:
+    EnvVar(std::string key, std::string value) : key(std::move(key)), value(std::move(value)) {}
+
+    const std::string& Key() const noexcept { return key; }
+    const std::string& Value() const noexcept { return value; }
+
+private:
+    std::string key;
+    std::string value;
+};
+
+/**
+ * A single option.
+ *
+ * Most options have just a single value, but options can span multiple
+ * lines via continuation. Every line is a dedicated value.
+ */
+struct Option {
+public:
+    Option(std::string key, std::string value) : key(std::move(key)) { values.push_back(std::move(value)); }
+
+    const std::string& Key() const { return key; }
+    const std::string& Value() const {
+        if ( values.size() > 1 )
+            throw std::logic_error("ignoring extra values from " + key);
+
+        return values[0];
+    }
+
+    void AddValue(std::string value) { values.push_back(std::move(value)); }
+
+    std::span<const std::string> Values() const { return values; }
+
+    std::string JoinedValues() const { return join(values); };
+
+    std::pair<std::vector<EnvVar>, std::string> AsEnvVars() const {
+        std::vector<EnvVar> envs;
+        // Split all values into key-value pairs and return.
+        for ( const auto& value : values ) {
+            if ( value.empty() )
+                continue;
+
+            auto idx = value.find('=');
+            if ( idx == std::string::npos )
+                return {{}, "invalid env value '" + value + "'"};
+
+            std::string k = value.substr(0, idx);
+            std::string v = value.substr(idx + 1);
+            envs.emplace_back(EnvVar(std::move(k), std::move(v)));
+        }
+        return {std::move(envs), ""};
+    }
+
+private:
+    std::string key;
+    std::vector<std::string> values;
+};
+
+/**
+ * A section in the configuration file.
+ */
+class Section {
+public:
+    Section() {}
+    explicit Section(std::string name) : name(std::move(name)) {}
+
+    const std::string& Name() const { return name; }
+    std::span<const Option> Options() const { return {options.begin(), options.end()}; }
+
+    /**
+     * Add an option to this section.
+     *
+     * @return Pointer to the Option instance within the vector.
+     */
+    Option* AddOption(Option o) {
+        options.push_back(std::move(o));
+        return &(*std::prev(options.end()));
+    }
+
+private:
+    std::string name;
+    std::vector<Option> options;
+};
+
+
+/**
+ * Hold info about an interface worker configuration.
+ *
+ * Essentially, this describes how many workers listen on a specific interface (which can be specified as template).
+ */
+class InterfaceWorkerConfig {
+public:
+    /**
+     * Instantiate a new interface worker config.
+     *
+     * @param tag The tag from the interface section, if any.
+     */
+    InterfaceWorkerConfig(std::string tag = "") : tag(std::move(tag)) {}
+
+    /**
+     * Instantiate a InterfaceWorkerConfig from a section.
+     *
+     * @param section The options to parse from
+     * @param allow_unknown_options If false, will return nullopt when encountering an unknown option.
+     *
+     * @return An instantiated InterfaceWorkerConfig or or std::nullopt on error.
+     */
+    static std::pair<InterfaceWorkerConfig, std::string> from_section(const Section& section,
+                                                                      bool allow_unknown_options = false);
+
+    /**
+     * The tag tag from [interface <tag>] section.
+     */
+    const std::string& Tag() const noexcept { return tag; }
+
+    const std::string& Interface() const noexcept { return interface; }
+
+    int Workers() const noexcept { return workers; }
+
+    /**
+     * The "full worker name" is worker-{Tag()}-{suffix}
+     * if the tag is set, else it is worker-{suffix} where
+     * suffix is usually the worker index.
+     */
+    std::string FullWorkerName(const std::string& suffix) const {
+        if ( ! Tag().empty() )
+            return "worker-" + Tag() + "-" + suffix;
+
+        return "worker-" + suffix;
+    }
+
+    /**
+     * @return worker-{tag}-{index} or worker-{index}, depending on whether tag is set or not.
+     */
+    std::string FullWorkerName(int index) const {
+        if ( index <= 0 || index > Workers() )
+            throw std::logic_error("bad index: " + std::to_string(index));
+
+        return FullWorkerName(std::to_string(index));
+    }
+
+    /**
+     * A worker's working directory.
+     */
+    std::filesystem::path MakeWorkingDirectory(const std::filesystem::path& spool_dir,
+                                               const std::string& suffix) const {
+        return spool_dir / FullWorkerName(suffix);
+    }
+
+    const std::string& Args() const noexcept { return args; }
+
+    const std::string& WorkerMemoryMax() const noexcept { return memory_max; }
+
+    std::optional<int> Nice() const noexcept { return nice; }
+
+    std::string AffinityFor(int index) const { return cpu_list.AffinityFor(index); }
+
+    std::optional<const std::string> NumaPolicy() const { return numa_policy; }
+
+    std::span<const EnvVar> Env() const { return std::span{env}; }
+
+private:
+    std::string tag;
+    std::string interface;
+    int workers = -1;
+
+    std::string args; // worker specific args to append
+    std::vector<EnvVar> env;
+
+    std::optional<int> nice;
+    std::string memory_max;
+    CpuList cpu_list;
+    std::optional<std::string> numa_policy;
+};
+
+/**
  * A Zeek cluster configuration for a single node.
  */
 class ZeekClusterConfig {
@@ -80,9 +262,19 @@ public:
 
     bool IsValid() const noexcept { return errors.empty(); }
 
-    bool IsEnabled() const noexcept { return ! interface.empty(); }
+    /**
+     * @return true if this config was found in <PREFIX>/etc/zeek/cluster/, rather than <PREFIX>/etc/zeek/
+     */
+    bool IsInClusterDir() const;
+
+    /**
+     * @return the path to the cluster directory if IsInClusterDir() is true. Just the parent of SourcePath().
+     */
+    std::filesystem::path ClusterDir() const;
 
     void Error(std::string msg) { errors.emplace_back(std::move(msg)); }
+
+    std::span<const std::string> Errors() const noexcept { return errors; }
 
     const std::filesystem::path& ZeekBaseDir() const { return zeek_base_dir; }
 
@@ -99,32 +291,31 @@ public:
 
     std::filesystem::path GeneratedScriptsDir() const { return SpoolDir() / "generated-scripts"; }
 
-    std::filesystem::path WorkingDirectory(const std::string& type, std::optional<unsigned int> index = {}) const {
-        if ( index == 0 ) {
-            std::fprintf(stderr, "index starts at 1\n");
-            abort();
-        }
-        return SpoolDir() / (type + (index.has_value() ? ("-" + std::to_string(*index)) : ""));
-    }
+    std::filesystem::path WorkingDirectory(const std::string& wdir) const { return SpoolDir() / wdir; }
 
     /**
-     * @return the mkdir command for the process's working directory.
+     * @return the mkdir command for a process's working directory.
      */
-    std::string MakeWorkingDirectoryCommand(const std::string& type, std::optional<unsigned int> index = {}) const {
-        return "mkdir -p " + WorkingDirectory(type, index).string();
+    std::string MakeWorkingDirectoryCommand(const std::string& wdir) const {
+        return "mkdir -p " + WorkingDirectory(wdir).string();
     }
 
     /**
      * @return the chown command for the process's working directory.
      */
-    std::string ChownWorkingDirectoryCommand(const std::string& type, std::optional<unsigned int> index = {}) const {
-        return "chown " + User() + ":" + Group() + " " + WorkingDirectory(type, index).string();
+    std::string ChownWorkingDirectoryCommand(const std::string& wdir) const {
+        return "chown " + User() + ":" + Group() + " " + WorkingDirectory(wdir).string();
     }
 
     /**
      * @return Where logger processes rotate their log files into and zeek-archiver picks them up.
      */
     std::filesystem::path LogQueueDir() const { return SpoolDir() / "log-queue"; }
+
+    /**
+     * @return True if the manager should be installed, otherwise false.
+     */
+    bool Manager() const noexcept { return manager; }
 
     /**
      * @return The number of loggers to run.
@@ -137,21 +328,23 @@ public:
     int Proxies() const noexcept { return proxies; }
 
     /**
-     * @return The number of of workers to run.
+     * @return The total number of workers running on this system.
      */
-    int Workers() const noexcept { return workers; }
+    int Workers() const noexcept {
+        int result = 0;
+        for ( const auto& iwc : interface_worker_configs )
+            result += iwc.Workers();
+        return result;
+    }
+
+    const std::vector<InterfaceWorkerConfig>& InterfaceWorkerConfigs() const { return interface_worker_configs; }
 
     /**
      * @return Colon separated string for the ZEEKPATH variable to use.
      */
     std::string ZeekPath() const;
 
-    /**
-     * @return The interface string to use.
-     */
-    const std::string& Interface() const { return interface; }
-
-    int NiceFor(const std::string& node) const;
+    std::optional<int> NiceFor(const std::string& node) const;
 
     const std::string& MemoryMaxFor(const std::string& node) const;
 
@@ -159,11 +352,29 @@ public:
      * @return The value of the args configuration.
      */
     const std::string& Args() const { return args; }
+    const std::string& ManagerArgs() const { return manager_args; }
+    const std::string& LoggerArgs() const { return logger_args; }
+    const std::string& ProxyArgs() const { return proxy_args; }
+
+    std::span<const EnvVar> Env() const { return std::span{env}; }
+    std::span<const EnvVar> ManagerEnv() const { return std::span{manager_env}; }
+    std::span<const EnvVar> LoggerEnv() const { return std::span{logger_env}; }
+    std::span<const EnvVar> ProxyEnv() const { return std::span{proxy_env}; }
 
     /**
      * @return The value of the cluster backend arguments.
      */
     const std::string& ClusterBackendArgs() const { return cluster_backend_args; }
+
+    /**
+     * If cluster_node_prefix is set, return the given string prepended with the prefix and a dash, else return s.
+     */
+    std::string PrefixedClusterNode(const std::string& s) const {
+        if ( cluster_node_prefix )
+            return *cluster_node_prefix + "-" + s;
+
+        return s;
+    }
 
     /**
      * Computes the PATH to use from ext_path, base_dir / bin and path.
@@ -174,10 +385,6 @@ public:
 
     const std::string& User() const { return user; }
     const std::string& Group() const { return group; }
-
-    const CpuList& WorkersCpuList() const { return workers_cpu_list; }
-
-    std::string WorkersNumaPolicy() const { return workers_numa_policy.value_or(""); }
 
     int RestartIntervalSec() const { return restart_interval_sec; }
 
@@ -193,8 +400,18 @@ public:
 
     /**
      * Generates string to run for generating cluster-layout.zeek
+     *
+     * This produces either an invocation of the zeek-cluster-layout-generator
+     * executable, or a command that copies the cluster_layout a specified
+     * in the configuration file.
      */
-    std::string ClusterLayoutGeneratorCommand() const;
+    std::string ClusterLayoutCommand() const;
+
+    const std::string& ClusterAddress() const { return cluster_address; }
+    int ClusterPort() const { return cluster_port; }
+
+    const std::string& MetricsAddress() const { return cluster_address; }
+    int MetricsPort() const { return metrics_port; };
 
     /**
      * Generate a command string for the zeek-archiver.
@@ -215,12 +432,19 @@ private:
     std::filesystem::path source_path;
     bool exists = false;
 
+    bool manager = true;
     int loggers = 1;
     int proxies = 1;
-    int workers = 1;
 
-    std::string interface;
     std::string args;
+    std::string manager_args;
+    std::string logger_args;
+    std::string proxy_args;
+
+    std::vector<EnvVar> env;
+    std::vector<EnvVar> manager_env;
+    std::vector<EnvVar> logger_env;
+    std::vector<EnvVar> proxy_env;
 
     std::string user = "zeek";
     std::string group = "zeek";
@@ -232,18 +456,17 @@ private:
 
     int start_limit_interval_sec = 0;
 
-    int nice_manager = 0;
-    int nice_logger = 0;
-    int nice_proxy = 0;
-    int nice_worker = 0;
+    std::optional<int> nice_manager;
+    std::optional<int> nice_logger;
+    std::optional<int> nice_proxy;
+    std::optional<int> nice_worker;
 
     std::string memory_max_manager;
     std::string memory_max_logger;
     std::string memory_max_proxy;
     std::string memory_max_worker;
 
-    CpuList workers_cpu_list;
-    std::optional<std::string> workers_numa_policy;
+    std::vector<InterfaceWorkerConfig> interface_worker_configs;
 
     std::string restart = "always";
     int restart_sec = 1;
@@ -251,8 +474,8 @@ private:
     // Broker and ZeroMQ stuff
     std::string cluster_backend_args;
 
-    int port = 27760;
-    std::string address = "127.0.0.1";
+    int cluster_port = 27760;
+    std::string cluster_address = "127.0.0.1";
 
     // Metrics
     int metrics_port = 9991;
@@ -265,8 +488,19 @@ private:
 
     std::filesystem::path cluster_layout_generator;
 
+    // Manually specify the cluster-layout.zeek
+    std::optional<std::filesystem::path> cluster_layout;
+
+    // Prefix for CLUSTER_NODE
+    std::optional<std::string> cluster_node_prefix;
+
     std::vector<std::string> errors;
 };
 
 ZeekClusterConfig parse_config(const std::filesystem::path& zeek_base_dir, const std::filesystem::path& source_path);
+
+/**
+ * Get the hostname via gethostname(), returning nullopt on error.
+ */
+std::optional<std::string> gethostname();
 } // namespace zeek::detail

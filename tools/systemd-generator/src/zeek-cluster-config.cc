@@ -2,16 +2,27 @@
 
 #include "zeek-cluster-config.h"
 
+#include <unistd.h>
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <climits>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <regex>
+#include <set>
+#include <stdexcept>
+#include <string> // strerror
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace {
+
+using zeek::detail::Option;
+using zeek::detail::Section;
 
 void ltrim(std::string& s) {
     s.erase(s.begin(), std::ranges::find_if(s.begin(), s.end(), [](unsigned char ch) { return ! std::isspace(ch); }));
@@ -55,62 +66,119 @@ std::vector<std::string_view> split(std::string_view v, char delim) {
     return result;
 }
 
-struct Option {
-    std::string key;
-    std::string value;
-    std::string orig; // The line from which key and value were extracted.
-};
-
 /**
- * Split the configuration into a vector of options.
+ * Parses \a content as ini-like format, returning vector of Section instances
+ * or a vector of error messages.
+ *
+ * Options not preceded by a [section] are placed into an unnamed section that
+ * has an empty string as the name. This will be the first entry in the returned
+ * list of sections. Zeek's config format either requires all options to exist
+ * in the unnamed section, or only in sections, but not mixed.
+ *
+ * This parser supports multi-value options by recognizing continuation lines
+ * and inserting every line as a separate value to support things like environment
+ * variables.
+ *
+ * worker_env =
+ *   key1=val1
+ *   key2=val2
+ *
+ * @param content The full content of zeek.conf as a string.
+ *
+ * @return Parsed sections and a vector of errors. If any errors occurred, do not work with the sections.
  */
-std::vector<Option> split_config(std::string content) {
-    std::vector<Option> result;
-    using std::operator""sv;
+std::pair<std::vector<Section>, std::vector<std::string>> parse_ini_like(const std::string& content) {
+    std::vector<std::string> errors;
+    std::set<std::string> section_names;
+    std::set<std::string> option_names;
+    std::vector<Section> sections;
+
+    // Default unnamed section.
+    Section current_section = Section();
+    Option* current_option = nullptr;
+
+    std::regex re_ignore("^(#.*|)$");                // commented or empty line
+    std::regex re_section("^\\[(.+)\\]$");           // [<section_name>]
+    std::regex re_option("^([_0-9a-z][^=]*)=(.*)$"); // key-value with = inbetween, value optional
+    std::regex re_option_cont("^\\s+([^\\s]+.*)$");  // option continuation starts with space
 
     for ( const auto line_sv : split(content, '\n') ) {
         auto line = std::string(line_sv.data(), line_sv.size());
+        rtrim(line);
 
-        trim(line);
+        std::smatch smatch;
 
-        if ( line.empty() || line[0] == '#' )
-            continue;
-
-        auto eq_pos = line.find('=');
-        if ( eq_pos == std::string::npos ) {
-            std::fprintf(stderr, "line '%s' missing =\n", line.c_str());
-            std::exit(1);
+        if ( std::regex_search(line, re_ignore) ) {
+            // ignore
         }
+        else if ( std::regex_search(line, smatch, re_section) ) {
+            if ( ! current_section.Options().empty() || ! current_section.Name().empty() ) {
+                section_names.insert(current_section.Name());
+                sections.push_back(std::move(current_section));
+            }
 
-        auto key = line.substr(0, eq_pos);
-        auto value = line.substr(eq_pos + 1);
-        trim(key);
-        trim(value);
+            std::string section_name = smatch[1];
+            if ( section_names.contains(section_name) ) {
+                errors.push_back("duplicate section '" + section_name + "'");
+                current_section = Section();
+                break;
+            }
 
-        result.push_back({.key = std::move(key), .value = std::move(value), .orig = {line_sv.begin(), line_sv.end()}});
+            current_section = Section(std::move(section_name));
+            current_option = nullptr;
+            option_names.clear();
+        }
+        else if ( std::regex_search(line, smatch, re_option) ) {
+            std::string key = smatch[1];
+            std::string value = smatch[2];
+            trim(key);
+            trim(value);
+
+            if ( option_names.contains(key) ) {
+                std::string message = "duplicate option '" + key + "'";
+                if ( ! current_section.Name().empty() )
+                    message = message + " in section '" + current_section.Name() + "'";
+
+                errors.push_back(std::move(message));
+                continue;
+            }
+            else {
+                option_names.insert(key);
+                current_option = current_section.AddOption({std::move(key), std::move(value)});
+            }
+        }
+        else if ( std::regex_search(line, smatch, re_option_cont) ) {
+            if ( ! current_option ) {
+                std::string message = "unexpected continuation line '" + line + "'";
+                if ( ! current_section.Name().empty() )
+                    message = message + " in section '" + current_section.Name() + "'";
+
+                errors.push_back(std::move(message));
+                continue;
+            }
+
+            current_option->AddValue(smatch[1]);
+        }
+        else {
+            std::string message = "invalid line '" + line + "'";
+            if ( ! current_section.Name().empty() )
+                message = message + " in section '" + current_section.Name() + "'";
+
+            errors.push_back(std::move(message));
+            continue;
+        }
     }
 
-    return result;
-}
-
-/**
- * " ".join(...) in C++, meh.
- */
-std::string join(const std::vector<std::string>& args, const std::string& sep = " ") {
-    std::string result;
-
-    for ( const auto& arg : args ) {
-        if ( ! result.empty() && ! sep.empty() )
-            result += sep;
-
-        result += arg;
+    if ( ! current_section.Options().empty() || ! current_section.Name().empty() ) {
+        section_names.insert(current_section.Name());
+        sections.push_back(std::move(current_section));
     }
 
-    return result;
+    return {sections, errors};
 }
 
 bool validate_bool(const Option& opt) {
-    auto val = opt.value;
+    auto val = opt.Value();
     tolower(val);
 
     if ( val == "1" || val == "true" )
@@ -118,12 +186,12 @@ bool validate_bool(const Option& opt) {
     else if ( val == "0" || val == "false" )
         return false;
 
-    fprintf(stderr, "invalid bool: %s for %s", opt.value.c_str(), opt.key.c_str());
+    fprintf(stderr, "invalid bool: %s for %s", opt.Value().c_str(), opt.Key().c_str());
     std::exit(1);
 }
 
 std::string validate_memory_max(const Option& opt) {
-    auto val = opt.value;
+    auto val = opt.Value();
     if ( val.empty() )
         return "";
 
@@ -131,7 +199,7 @@ std::string validate_memory_max(const Option& opt) {
 
     if ( ! std::isdigit(c) ) {
         if ( c != 'K' && c != 'M' && c != 'G' && c != 'T' ) {
-            std::fprintf(stderr, "invalid memory max: %s for %s\n", opt.value.c_str(), opt.key.c_str());
+            std::fprintf(stderr, "invalid memory max: %s for %s\n", opt.Value().c_str(), opt.Key().c_str());
             std::exit(1);
         }
 
@@ -139,11 +207,11 @@ std::string validate_memory_max(const Option& opt) {
     }
 
     if ( ! std::ranges::all_of(val.begin(), val.end(), [](auto c) { return std::isdigit(c); }) ) {
-        std::fprintf(stderr, "invalid memory max: '%s' for %s\n", opt.value.c_str(), opt.key.c_str());
+        std::fprintf(stderr, "invalid memory max: '%s' for %s\n", opt.Value().c_str(), opt.Key().c_str());
         std::exit(1);
     }
 
-    return opt.value;
+    return opt.Value();
 }
 
 std::optional<int> parse_int(std::string_view sv) {
@@ -163,7 +231,7 @@ std::optional<int> parse_int(std::string_view sv) {
 }
 
 int validate_nice(const Option& opt) {
-    std::string val = opt.value;
+    std::string val = opt.Value();
     trim(val);
 
     if ( val.empty() )
@@ -171,7 +239,7 @@ int validate_nice(const Option& opt) {
 
     auto nice = parse_int(val);
     if ( ! nice.has_value() || *nice < -20 || *nice > 19 ) {
-        std::fprintf(stderr, "invalid nice value: %s for %s\n", opt.value.c_str(), opt.key.c_str());
+        std::fprintf(stderr, "invalid nice value: %s for %s\n", opt.Value().c_str(), opt.Key().c_str());
         std::exit(1);
     }
 
@@ -181,6 +249,20 @@ int validate_nice(const Option& opt) {
 } // namespace
 
 namespace zeek::detail {
+
+// " ".join(...) in C++, meh.
+std::string join(std::span<const std::string> args, const std::string& sep) {
+    std::string result;
+
+    for ( const auto& arg : args ) {
+        if ( ! result.empty() && ! sep.empty() && ! arg.empty() )
+            result += sep;
+
+        result += arg;
+    }
+
+    return result;
+}
 
 // Grumble. Feels like wrong to implement this by hand.
 std::optional<std::string> ZeekClusterConfig::SubstituteVars(const std::string& s,
@@ -295,6 +377,113 @@ CpuList::CpuList(const std::string& list) {
     }
 }
 
+std::pair<InterfaceWorkerConfig, std::string> zeek::detail::InterfaceWorkerConfig::from_section(
+    const Section& section, bool allow_unknown_options) {
+    auto section_name = section.Name();
+    InterfaceWorkerConfig iwc;
+
+    std::regex section_tag_re("interface ([-_a-z0-9]+)$");
+
+    if ( section_name.starts_with("interface") ) {
+        std::smatch smatch;
+
+        if ( ! std::regex_search(section_name, smatch, section_tag_re) )
+            return {iwc, "invalid interface tag in '" + section_name + "' (must match /interface [-_a-z0-9]+/)"};
+
+        // Re-initialize iwc with the appropriate tag.
+        iwc = InterfaceWorkerConfig(smatch[1]);
+    }
+
+    auto options = section.Options();
+    if ( options.empty() )
+        return {iwc, {"empty section"}};
+
+    for ( const auto& option : options ) {
+        std::string key = option.Key();
+        tolower(key);
+
+        // Only env and args options support multiple values.
+
+        if ( ! key.ends_with("env") && ! key.ends_with("args") && option.Values().size() > 1 )
+            return {iwc, "multiple values for '" + key + "' given"};
+
+        // When the next interface option is reached, stop interpreting any keys.
+        if ( key == "interface" ) {
+            iwc.interface = option.Value();
+        }
+        else if ( key == "workers" ) {
+            auto result = parse_int(option.Value());
+            if ( result && *result >= 0 )
+                iwc.workers = *result;
+            else {
+                return {iwc, "invalid workers value: '" + option.Value() + "'"};
+            }
+        }
+        else if ( key == "worker_args" ) {
+            iwc.args = option.JoinedValues();
+        }
+        else if ( key == "worker_env" ) {
+            auto [env, error] = option.AsEnvVars();
+            if ( ! error.empty() )
+                return {iwc, "error in worker_env: " + error};
+
+            iwc.env = std::move(env);
+        }
+        else if ( key == "workers_cpu_list" ) {
+            iwc.cpu_list = CpuList(option.Value());
+            if ( ! iwc.cpu_list.IsValid() )
+                return {iwc, "invalid workers_cpu_list value"};
+        }
+        else if ( key == "worker_numa_policy" || key == "workers_numa_policy" ) {
+            if ( key == "workers_numa_policy" )
+                fprintf(stderr, "Remove in v9.1: workers_numa_policy is deprecated, replace with worker_numa_policy\n");
+
+            if ( option.Value() != "local" && option.Value() != "default" ) {
+                return {iwc, "invalid '" + key + "' value"};
+            }
+
+            iwc.numa_policy = option.Value();
+        }
+        else if ( key == "worker_nice" ) {
+            iwc.nice = validate_nice(option);
+        }
+        else if ( key == "worker_memory_max" ) {
+            iwc.memory_max = validate_memory_max(option);
+        }
+        else if ( ! allow_unknown_options ) {
+            std::string message = "invalid option '" + key + "'";
+            if ( ! section.Name().empty() )
+                message = message + " in section '" + section.Name() + "'";
+            return {iwc, message};
+        }
+    }
+
+    // This allows a simple zeek.conf that *only* contains the interface option
+    // to work and use just one worker. If interface isn't set, default to 0
+    // workers.
+    if ( section.Name().empty() && iwc.workers < 0 ) {
+        if ( ! iwc.Interface().empty() )
+            iwc.workers = 1;
+        else
+            iwc.workers = 0;
+    }
+
+    // Verify interface and workers was set in a named section!
+    if ( ! section.Name().empty() ) {
+        if ( iwc.Interface().empty() ) {
+            std::string message = "missing or empty interface option in section '" + section.Name() + "'";
+            return {iwc, message};
+        }
+
+        if ( iwc.workers < 0 ) {
+            std::string message = "missing workers option in section '" + section.Name() + "'";
+            return {iwc, message};
+        }
+    }
+
+    return {iwc, ""};
+}
+
 ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_dir,
                                const std::filesystem::path& source_path) {
     ZeekClusterConfig config(default_zeek_base_dir, source_path);
@@ -304,110 +493,221 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
 
     config.SetExists();
 
+    // Read the whole config file into memory.
     auto content = std::string{std::istreambuf_iterator<char>(ifs), {}};
-    auto entries = split_config(std::move(content));
+    auto [sections, errors] = parse_ini_like(content);
+
+    if ( ! errors.empty() ) {
+        for ( const auto& error : errors )
+            config.Error(error);
+
+        return config;
+    }
+
+    // Empty section to use when there's no [zeek] section.
+    Section empty_section;
+    const Section* zeek_section = nullptr;
+
+    // We support two configuration styles:
+    //
+    // 1) section-less: All configuration keys plainly in zeek.conf. Only a single
+    //    interface is supported. parse_ini_like() returns a single unnamed Section
+    //    with an empty string as the name.
+    //
+    // 2) A [zeek] section + multiple [interface <tag>] sections, where tag is
+    //    some identifier.
+    if ( sections.size() == 1 && sections[0].Name() == "" ) {
+        // section-less
+        auto [iwc, error] = InterfaceWorkerConfig::from_section(sections[0], /*allow_unknown_options=*/true);
+        if ( ! error.empty() ) {
+            config.Error(std::move(error));
+            return config;
+        }
+
+        config.interface_worker_configs.push_back(std::move(iwc));
+
+        zeek_section = &sections[0];
+    }
+    else {
+        // Iterate through all sections, remember the [zeek] section
+        // and interpret every [interface tag] section, too. If there's
+        // an unnamed section, that's an error.
+        for ( const auto& section : sections ) {
+            if ( section.Name() == "" ) {
+                config.Error("options in unnamed section mixed with options in sections");
+                return config;
+            }
+
+            if ( section.Name() == "zeek" ) {
+                zeek_section = &section;
+                continue;
+            }
+
+            if ( ! section.Name().starts_with("interface") )
+                continue;
+
+            auto [iwc, error] = InterfaceWorkerConfig::from_section(section);
+            if ( ! error.empty() ) {
+                config.Error(std::move(error));
+                return config;
+            }
+
+            config.interface_worker_configs.push_back(std::move(iwc));
+        }
+
+        if ( ! zeek_section )
+            zeek_section = &empty_section;
+    }
+
+    assert(zeek_section);
+    assert(zeek_section->Name() == "" || zeek_section->Name() == "zeek");
 
     // Before we start building a generic configuration framework, we should consider
     // that the number of options we ever add here should be limited, so maybe that
     // horrid if-else thing isn't all that bad, and it's obvious what's going on.
-    for ( const auto& entry : entries ) {
-        std::string key = entry.key;
+    auto options = zeek_section->Options();
+
+    for ( size_t i = 0; i < options.size(); i++ ) {
+        const auto& option = options[i];
+        std::string key = option.Key();
         tolower(key);
 
-        if ( key == "interface" ) {
-            config.interface = entry.value;
+        if ( key == "args" ) {
+            config.args = option.JoinedValues();
         }
-        else if ( key == "args" ) {
-            config.args = entry.value;
+        else if ( key == "manager_args" ) {
+            config.manager_args = option.JoinedValues();
+        }
+        else if ( key == "logger_args" ) {
+            config.logger_args = option.JoinedValues();
+        }
+        else if ( key == "proxy_args" ) {
+            config.proxy_args = option.JoinedValues();
+        }
+        else if ( key == "env" ) {
+            auto [env, error] = option.AsEnvVars();
+            if ( error.empty() )
+                config.env = std::move(env);
+            else
+                config.Error("error in env: " + error);
+        }
+        else if ( key == "manager_env" ) {
+            auto [env, error] = option.AsEnvVars();
+            if ( error.empty() )
+                config.manager_env = std::move(env);
+            else
+                config.Error("error in manager_env: " + error);
+        }
+        else if ( key == "logger_env" ) {
+            auto [env, error] = option.AsEnvVars();
+            if ( error.empty() )
+                config.logger_env = std::move(env);
+            else
+                config.Error("error in logger_env: " + error);
+        }
+        else if ( key == "proxy_env" ) {
+            auto [env, error] = option.AsEnvVars();
+            if ( error.empty() )
+                config.proxy_env = std::move(env);
+            else
+                config.Error("error in proxy_env: " + error);
         }
         else if ( key == "user" ) {
-            config.user = entry.value;
+            config.user = option.Value();
         }
         else if ( key == "group" ) {
-            config.group = entry.value;
+            config.group = option.Value();
         }
-        else if ( key == "workers" ) {
-            config.workers = std::atoi(entry.value.c_str());
+        else if ( key == "manager" ) {
+            // manager only support 0 or 1 for now. on or off.
+            auto result = parse_int(option.Value());
+            if ( result == 0 || result == 1 )
+                config.manager = result == 1;
+            else
+                config.Error("invalid manager value: '" + option.Value() + "'");
         }
         else if ( key == "proxies" ) {
-            config.proxies = std::atoi(entry.value.c_str());
+            auto result = parse_int(option.Value());
+            if ( result && *result >= 0 )
+                config.proxies = *result;
+            else
+                config.Error("invalid proxies value: '" + option.Value() + "'");
         }
         else if ( key == "loggers" ) {
-            config.loggers = std::atoi(entry.value.c_str());
+            auto result = parse_int(option.Value());
+            if ( result && result >= 0 )
+                config.loggers = *result;
+            else
+                config.Error("invalid loggers value: '" + option.Value() + "'");
         }
-        else if ( key == "base_dir" && ! entry.value.empty() ) {
-            config.zeek_base_dir = entry.value;
+        else if ( key == "base_dir" ) {
+            if ( ! option.Value().empty() )
+                config.zeek_base_dir = option.Value();
         }
         else if ( key == "path" ) {
-            config.path = entry.value;
+            config.path = option.Value();
         }
         else if ( key == "ext_path" ) {
-            config.ext_path = entry.value;
+            config.ext_path = option.Value();
         }
         else if ( key == "ext_zeek_path" ) {
-            config.ext_zeek_path = entry.value;
-        }
-        else if ( key == "workers_cpu_list" ) {
-            config.workers_cpu_list = CpuList(entry.value);
-        }
-        else if ( key == "workers_numa_policy" ) {
-            if ( entry.value != "local" && entry.value != "default" ) {
-                std::fprintf(stderr, "invalid workers_numa_policy '%s'", entry.value.c_str());
-                std::exit(1);
-            }
-
-            config.workers_numa_policy = entry.value;
+            config.ext_zeek_path = option.Value();
         }
         else if ( key == "cluster_backend_args" ) {
-            config.cluster_backend_args = entry.value;
+            config.cluster_backend_args = option.JoinedValues();
         }
-        else if ( key == "port" ) {
-            config.port = std::atoi(entry.value.c_str());
+        else if ( key == "cluster_layout" ) {
+            config.cluster_layout = option.Value();
         }
-        else if ( key == "address" ) {
-            config.address = entry.value;
+        else if ( key == "cluster_node_prefix" ) {
+            config.cluster_node_prefix = option.Value();
+        }
+        else if ( key == "port" || key == "cluster_port" ) {
+            config.cluster_port = std::atoi(option.Value().c_str());
+        }
+        else if ( key == "address" || key == "cluster_address" ) {
+            config.cluster_address = option.Value();
         }
         else if ( key == "metrics_port" ) {
-            config.metrics_port = std::atoi(entry.value.c_str());
+            config.metrics_port = std::atoi(option.Value().c_str());
         }
         else if ( key == "metrics_address" ) {
-            config.metrics_address = entry.value;
+            config.metrics_address = option.Value();
         }
         else if ( key == "archiver" ) {
-            config.enable_archiver = validate_bool(entry);
+            config.enable_archiver = validate_bool(option);
         }
         else if ( key == "archiver_args" ) {
-            config.archiver_args = entry.value;
+            config.archiver_args = option.JoinedValues();
         }
         else if ( key == "manager_nice" ) {
-            config.nice_manager = validate_nice(entry);
+            config.nice_manager = validate_nice(option);
         }
         else if ( key == "logger_nice" ) {
-            config.nice_logger = validate_nice(entry);
+            config.nice_logger = validate_nice(option);
         }
         else if ( key == "proxy_nice" ) {
-            config.nice_proxy = validate_nice(entry);
-        }
-        else if ( key == "worker_nice" ) {
-            config.nice_worker = validate_nice(entry);
+            config.nice_proxy = validate_nice(option);
         }
         else if ( key == "manager_memory_max" ) {
-            config.memory_max_manager = validate_memory_max(entry);
+            config.memory_max_manager = validate_memory_max(option);
         }
         else if ( key == "logger_memory_max" ) {
-            config.memory_max_logger = validate_memory_max(entry);
+            config.memory_max_logger = validate_memory_max(option);
         }
         else if ( key == "proxy_memory_max" ) {
-            config.memory_max_proxy = validate_memory_max(entry);
-        }
-        else if ( key == "worker_memory_max" ) {
-            config.memory_max_worker = validate_memory_max(entry);
+            config.memory_max_proxy = validate_memory_max(option);
         }
         else if ( key == "restart_interval_sec" ) {
-            config.restart_interval_sec = std::atoi(entry.value.c_str());
+            config.restart_interval_sec = std::atoi(option.Value().c_str());
         }
         else {
-            std::fprintf(stderr, "ignoring unknown key '%s' from line '%s'\n", key.c_str(), entry.orig.c_str());
+            // Ignore unknown keys if we parse section-less
+            if ( zeek_section->Name().empty() )
+                continue;
+
+            // Otherwise, it's an error.
+            config.Error("invalid key '" + key + "' in section '" + zeek_section->Name() + "'");
         }
     }
 
@@ -415,18 +715,87 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
     if ( config.cluster_backend_args.empty() )
         config.cluster_backend_args = "frameworks/cluster/backend/zeromq";
 
+    // Default to local if args is empty - not sure if this is so clever.
     if ( config.args.empty() )
         config.args = "local";
 
     // Assume zeek-cluster-layout-generator is in /bin
     config.cluster_layout_generator = config.ZeekBaseDir() / "bin" / "zeek-cluster-layout-generator";
 
-    config.source_path = source_path;
-
     return config;
 }
 
-std::string ZeekClusterConfig::ClusterLayoutGeneratorCommand() const {
+bool ZeekClusterConfig::IsInClusterDir() const {
+    auto hostname = zeek::detail::gethostname();
+    if ( ! hostname.has_value() )
+        return false;
+
+    // Just some sanity checking.
+    auto stem = source_path.stem().stem(); // strip .zeek.conf
+    auto parent = source_path.parent_path().filename();
+    return parent == "cluster" && stem == *hostname;
+}
+
+std::filesystem::path ZeekClusterConfig::ClusterDir() const {
+    // Just some sanity checking.
+    if ( ! IsInClusterDir() )
+        throw std::logic_error("Do not call ClusterDir() for non-cluster config");
+
+    return source_path.parent_path();
+}
+
+std::string ZeekClusterConfig::ClusterLayoutCommand() const {
+    // If a cluster_layout is given in the configuration, copy that
+    // into the generated script directory.
+    if ( cluster_layout.has_value() ) {
+        std::vector<std::string> cmd_args = {
+            "cp",
+            "-f",
+            cluster_layout->string(),
+            (GeneratedScriptsDir() / "cluster-layout.zeek").string(),
+        };
+
+        return join(cmd_args);
+    }
+
+    // If this configuration is coming from /etc/zeek/cluster, use
+    // the zeek-cluster-layout-generator executable's -C argument to
+    // pass the directory.
+    if ( IsInClusterDir() ) {
+        std::vector<std::string> cmd_args = {
+            cluster_layout_generator.string(),
+            "-C",
+            ClusterDir(),
+            "-o",
+            (GeneratedScriptsDir() / "cluster-layout.zeek").string(),
+        };
+
+        return join(cmd_args);
+    }
+
+    // First, construct the -W argument. Either it's a single number when
+    // there's only a single non-tagged interface, or it's in eth0:2,eth1:2,...
+    // form as to produce tagged worker names.
+    std::string worker_arg;
+    for ( const auto& iwc : interface_worker_configs ) {
+        // If there is an interface with an empty tag, there should only ver
+        // be a single interface and worker_arg not yet populated.
+        //
+        // If this throws, there must be some config validation error earlier.
+        if ( iwc.Tag().empty() ) {
+            if ( ! worker_arg.empty() || interface_worker_configs.size() != 1 )
+                throw std::logic_error("empty tag but worker_arg populated?");
+
+            worker_arg = std::to_string(iwc.Workers());
+            break;
+        }
+
+        if ( ! worker_arg.empty() )
+            worker_arg += ",";
+
+        worker_arg += (iwc.Tag() + ":" + std::to_string(iwc.Workers()));
+    }
+
     std::vector<std::string> cmd_args = {
         cluster_layout_generator.string(),
         "-L",
@@ -434,11 +803,11 @@ std::string ZeekClusterConfig::ClusterLayoutGeneratorCommand() const {
         "-P",
         std::to_string(proxies),
         "-W",
-        std::to_string(workers),
+        worker_arg,
         "-p",
-        std::to_string(port),
+        std::to_string(cluster_port),
         "-a",
-        address,
+        cluster_address,
         "-m",
         std::to_string(metrics_port),
         "-b",
@@ -497,32 +866,41 @@ std::string ZeekClusterConfig::Path() const {
     return result + path;
 }
 
-int ZeekClusterConfig::NiceFor(const std::string& node) const {
+std::optional<int> ZeekClusterConfig::NiceFor(const std::string& node) const {
     if ( node == "manager" )
         return nice_manager;
-    else if ( node.starts_with("logger-") )
+    else if ( node.starts_with("logger") )
         return nice_logger;
-    else if ( node.starts_with("proxy-") )
+    else if ( node.starts_with("proxy") )
         return nice_proxy;
-    else if ( node.starts_with("worker-") )
-        return nice_worker;
 
     std::fprintf(stderr, "invalid node '%s' in NiceFor()\n", node.c_str());
-    abort();
+    return std::nullopt;
 }
 
 const std::string& ZeekClusterConfig::MemoryMaxFor(const std::string& node) const {
     if ( node == "manager" )
         return memory_max_manager;
-    else if ( node.starts_with("logger-") )
+    else if ( node.starts_with("logger") )
         return memory_max_logger;
-    else if ( node.starts_with("proxy-") )
+    else if ( node.starts_with("proxy") )
         return memory_max_proxy;
-    else if ( node.starts_with("worker-") )
+    else if ( node.starts_with("worker") )
         return memory_max_worker;
 
     std::fprintf(stderr, "invalid node '%s' in MemoryMaxFor()\n", node.c_str());
     abort();
+}
+
+std::optional<std::string> gethostname() {
+    char buf[HOST_NAME_MAX];
+
+    if ( ::gethostname(buf, sizeof(buf)) < 0 ) {
+        std::fprintf(stderr, "failed gethostname: %s", ::strerror(errno));
+        return std::nullopt;
+    }
+
+    return buf;
 }
 
 /**
