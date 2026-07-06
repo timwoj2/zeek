@@ -715,6 +715,11 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
     if ( config.cluster_backend_args.empty() )
         config.cluster_backend_args = "frameworks/cluster/backend/zeromq";
 
+    // If this is a cluster configuration, but no explicit cluster_node_prefix set,
+    // use the hostname from the config file.
+    if ( config.IsInClusterDir() && ! config.cluster_node_prefix.has_value() )
+        config.cluster_node_prefix = config.SourcePath().stem().stem();
+
     // Default to local if args is empty - not sure if this is so clever.
     if ( config.args.empty() )
         config.args = "local";
@@ -726,14 +731,11 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
 }
 
 bool ZeekClusterConfig::IsInClusterDir() const {
-    auto hostname = zeek::detail::gethostname();
-    if ( ! hostname.has_value() )
-        return false;
-
-    // Just some sanity checking.
-    auto stem = source_path.stem().stem(); // strip .zeek.conf
+    // Example: xxx/cluster/host.zeek.conf
+    auto ext1 = source_path.extension();
+    auto ext2 = source_path.stem().extension();
     auto parent = source_path.parent_path().filename();
-    return parent == "cluster" && stem == *hostname;
+    return parent == "cluster" && ext1 == ".conf" && ext2 == ".zeek";
 }
 
 std::filesystem::path ZeekClusterConfig::ClusterDir() const {
