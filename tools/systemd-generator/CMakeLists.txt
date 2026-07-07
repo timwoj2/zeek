@@ -16,6 +16,7 @@ if (NOT is_subproject)
 else ()
     set(_default_base_dir "${CMAKE_INSTALL_PREFIX}")
     set(_default_etc_dir "${ZEEK_ETC_INSTALL_DIR}")
+    set(DOCTEST_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../src/3rdparty/")
 endif ()
 
 set(_default ON)
@@ -32,6 +33,12 @@ if (ENABLE_ZEEK_SYSTEMD_GENERATOR)
     # Separate supporting libraries that aren't systemd specific.
     add_library(systemd-generator OBJECT src/systemd-unit.cc)
     add_library(zeek-cluster-config OBJECT src/zeek-cluster-config.cc)
+
+    if (DOCTEST_INCLUDE_DIR)
+        add_executable(zeek-cluster-config-test src/zeek-cluster-config-test.cc)
+        target_include_directories(zeek-cluster-config-test PRIVATE ${DOCTEST_INCLUDE_DIR})
+        target_link_libraries(zeek-cluster-config-test zeek-cluster-config)
+    endif ()
 
     add_executable(zeek-systemd-generator src/zeek-systemd-generator.cc)
     target_compile_definitions(

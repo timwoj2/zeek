@@ -23,6 +23,7 @@ namespace {
 
 using zeek::detail::Option;
 using zeek::detail::Section;
+using zeek::detail::split;
 
 void ltrim(std::string& s) {
     s.erase(s.begin(), std::ranges::find_if(s.begin(), s.end(), [](unsigned char ch) { return ! std::isspace(ch); }));
@@ -42,9 +43,80 @@ void tolower(std::string& s) {
     std::ranges::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
 }
 
-/**
- * Split \a v by \a delim into a vector of string views.
- */
+bool validate_bool(const Option& opt) {
+    auto val = opt.Value();
+    tolower(val);
+
+    if ( val == "1" || val == "true" )
+        return true;
+    else if ( val == "0" || val == "false" )
+        return false;
+
+    fprintf(stderr, "invalid bool: %s for %s", opt.Value().c_str(), opt.Key().c_str());
+    std::exit(1);
+}
+
+std::string validate_memory_max(const Option& opt) {
+    auto val = opt.Value();
+    if ( val.empty() )
+        return "";
+
+    auto c = val[val.size() - 1];
+
+    if ( ! std::isdigit(c) ) {
+        if ( c != 'K' && c != 'M' && c != 'G' && c != 'T' ) {
+            std::fprintf(stderr, "invalid memory max: %s for %s\n", opt.Value().c_str(), opt.Key().c_str());
+            std::exit(1);
+        }
+
+        val = val.substr(0, val.size() - 1);
+    }
+
+    if ( ! std::ranges::all_of(val.begin(), val.end(), [](auto c) { return std::isdigit(c); }) ) {
+        std::fprintf(stderr, "invalid memory max: '%s' for %s\n", opt.Value().c_str(), opt.Key().c_str());
+        std::exit(1);
+    }
+
+    return opt.Value();
+}
+
+std::optional<int> parse_int(std::string_view sv) {
+    if ( sv.size() == 0 )
+        return {};
+
+    // Copy to a string instance.
+    std::string s = {sv.data(), sv.size()};
+
+    char* endptr = nullptr;
+    int result = std::strtol(s.c_str(), &endptr, 10);
+
+    if ( endptr != &s[s.size()] ) // was the whole string valid?
+        return {};
+
+    return result;
+}
+
+int validate_nice(const Option& opt) {
+    std::string val = opt.Value();
+    trim(val);
+
+    if ( val.empty() )
+        return 0;
+
+    auto nice = parse_int(val);
+    if ( ! nice.has_value() || *nice < -20 || *nice > 19 ) {
+        std::fprintf(stderr, "invalid nice value: %s for %s\n", opt.Value().c_str(), opt.Key().c_str());
+        std::exit(1);
+    }
+
+    return *nice;
+};
+
+} // namespace
+
+namespace zeek::detail {
+
+// Split \a v by \a delim into a vector of string views.
 std::vector<std::string_view> split(std::string_view v, char delim) {
     std::vector<std::string_view> result;
     size_t pos = 0;
@@ -62,6 +134,20 @@ std::vector<std::string_view> split(std::string_view v, char delim) {
         if ( pos >= v.size() )
             result.emplace_back(v.substr(pos, 0));
     } while ( pos < v.size() );
+
+    return result;
+}
+
+// " ".join(...) in C++, meh.
+std::string join(std::span<const std::string> args, const std::string& sep) {
+    std::string result;
+
+    for ( const auto& arg : args ) {
+        if ( ! result.empty() && ! sep.empty() && ! arg.empty() )
+            result += sep;
+
+        result += arg;
+    }
 
     return result;
 }
@@ -177,96 +263,9 @@ std::pair<std::vector<Section>, std::vector<std::string>> parse_ini_like(const s
     return {sections, errors};
 }
 
-bool validate_bool(const Option& opt) {
-    auto val = opt.Value();
-    tolower(val);
-
-    if ( val == "1" || val == "true" )
-        return true;
-    else if ( val == "0" || val == "false" )
-        return false;
-
-    fprintf(stderr, "invalid bool: %s for %s", opt.Value().c_str(), opt.Key().c_str());
-    std::exit(1);
-}
-
-std::string validate_memory_max(const Option& opt) {
-    auto val = opt.Value();
-    if ( val.empty() )
-        return "";
-
-    auto c = val[val.size() - 1];
-
-    if ( ! std::isdigit(c) ) {
-        if ( c != 'K' && c != 'M' && c != 'G' && c != 'T' ) {
-            std::fprintf(stderr, "invalid memory max: %s for %s\n", opt.Value().c_str(), opt.Key().c_str());
-            std::exit(1);
-        }
-
-        val = val.substr(0, val.size() - 1);
-    }
-
-    if ( ! std::ranges::all_of(val.begin(), val.end(), [](auto c) { return std::isdigit(c); }) ) {
-        std::fprintf(stderr, "invalid memory max: '%s' for %s\n", opt.Value().c_str(), opt.Key().c_str());
-        std::exit(1);
-    }
-
-    return opt.Value();
-}
-
-std::optional<int> parse_int(std::string_view sv) {
-    if ( sv.size() == 0 )
-        return {};
-
-    // Copy to a string instance.
-    std::string s = {sv.data(), sv.size()};
-
-    char* endptr = nullptr;
-    int result = std::strtol(s.c_str(), &endptr, 10);
-
-    if ( endptr != &s[s.size()] ) // was the whole string valid?
-        return {};
-
-    return result;
-}
-
-int validate_nice(const Option& opt) {
-    std::string val = opt.Value();
-    trim(val);
-
-    if ( val.empty() )
-        return 0;
-
-    auto nice = parse_int(val);
-    if ( ! nice.has_value() || *nice < -20 || *nice > 19 ) {
-        std::fprintf(stderr, "invalid nice value: %s for %s\n", opt.Value().c_str(), opt.Key().c_str());
-        std::exit(1);
-    }
-
-    return *nice;
-};
-
-} // namespace
-
-namespace zeek::detail {
-
-// " ".join(...) in C++, meh.
-std::string join(std::span<const std::string> args, const std::string& sep) {
-    std::string result;
-
-    for ( const auto& arg : args ) {
-        if ( ! result.empty() && ! sep.empty() && ! arg.empty() )
-            result += sep;
-
-        result += arg;
-    }
-
-    return result;
-}
 
 // Grumble. Feels like wrong to implement this by hand.
-std::optional<std::string> ZeekClusterConfig::SubstituteVars(const std::string& s,
-                                                             const std::map<std::string, std::string>& vars) {
+std::optional<std::string> substitute_vars(const std::string& s, const std::map<std::string, std::string>& vars) {
     std::size_t pos = 0;
     std::string result;
 
@@ -314,9 +313,15 @@ std::optional<std::string> ZeekClusterConfig::SubstituteVars(const std::string& 
     return result;
 }
 
+
 // More grumble.
 CpuList::CpuList(const std::string& list) {
-    using std::operator""sv;
+    // Split gives us a single empty entry for an empty list,
+    // just handle that here upfront.
+    if ( list.empty() ) {
+        is_valid = true;
+        return;
+    }
 
     auto number_or_range_parts = split(list, ',');
 
@@ -371,7 +376,7 @@ CpuList::CpuList(const std::string& list) {
             cpus.push_back(*n);
         }
         else {
-            is_valid = false;
+            is_valid = list.empty(); // no parts and empty input: valid.
             return;
         }
     }
@@ -903,138 +908,6 @@ std::optional<std::string> gethostname() {
     }
 
     return buf;
-}
-
-/**
- * Really just testing for the SubstituteVars() function.
- */
-void ZeekClusterConfig::RunUnitTests() {
-    int errors = 0;
-
-    auto test_split = [&errors](std::string s, char delim, std::vector<std::string_view> expected) {
-        auto result = split(s, delim);
-
-        if ( result != expected ) {
-            std::fprintf(stderr, "FAIL: %s\n", s.c_str());
-            std::fprintf(stderr, " result  ");
-            for ( const auto& r : result )
-                fprintf(stderr, " %s", std::string(r.data(), r.size()).c_str());
-            fprintf(stderr, "\n");
-
-            std::fprintf(stderr, " expected");
-            for ( const auto& r : expected )
-                fprintf(stderr, " %s", std::string(r.data(), r.size()).c_str());
-            fprintf(stderr, "\n");
-            ++errors;
-        }
-    };
-
-    test_split("", ',', {""});
-    test_split(",", ',', {"", ""});
-    test_split("1,", ',', {"1", ""});
-    test_split("1,2", ',', {"1", "2"});
-    test_split("9,10-12:1,18-24:2", ',', {"9", "10-12:1", "18-24:2"});
-    test_split("9:10", ':', {"9", "10"});
-    test_split("9::10", ':', {"9", "", "10"});
-
-    auto test_replace_vars = [&errors](std::string s, std::map<std::string, std::string> vars,
-                                       std::optional<std::string> expected) {
-        // std::fprintf(stderr, "=== run %s\n", s.c_str());
-        auto result = ZeekClusterConfig::SubstituteVars(s, vars);
-
-        if ( ! expected.has_value() ) {
-            if ( result.has_value() ) {
-                std::fprintf(stderr, "FAIL: expected error, but got result '%s'\n", result->c_str());
-                ++errors;
-            }
-        }
-        else {
-            if ( ! result.has_value() ) {
-                ++errors;
-                std::fprintf(stderr, "FAIL: expected '%s' from '%s' but got error\n", expected.value().c_str(),
-                             s.c_str());
-            }
-            else if ( result != expected ) {
-                ++errors;
-                std::fprintf(stderr, "FAIL: '%s', got '%s'\n", expected.value().c_str(), result.value().c_str());
-            }
-        }
-    };
-
-    test_replace_vars("af_packet::eth0", {{"b", "XXX"}}, "af_packet::eth0");
-    test_replace_vars("\\${a}", {{"a", "XXX"}}, "${a}");
-    test_replace_vars("${a}", {{"a", "AAA"}}, "AAA");
-    test_replace_vars("a\\${b}", {{"b", "XXX"}}, "a${b}");
-    test_replace_vars("a\\${b}c", {{"b", "XXX"}}, "a${b}c");
-    test_replace_vars("a\\${b}\\c", {{"b", "XXX"}}, "a${b}\\c");
-    test_replace_vars("a${b}", {{"b", "BBB"}}, "aBBB");
-    test_replace_vars("a${b}${c}", {{"b", "BBB"}, {"c", "CCC"}}, "aBBBCCC");
-    test_replace_vars("a${b}x${c}y", {{"b", "BBB"}, {"c", "CCC"}}, "aBBBxCCCy");
-
-
-    auto test_parse_cpu = [&errors](std::string s, std::optional<std::vector<int>> expected = {}) {
-        auto result = CpuList(s);
-
-        if ( ! expected.has_value() ) {
-            if ( result.IsValid() ) {
-                fprintf(stderr, "FAIL: Expected failure but result valid for '%s'\n", s.c_str());
-                ++errors;
-                return;
-            }
-            return; // Expected failure and got it.
-        }
-
-        if ( result.Indices() != *expected ) {
-            std::fprintf(stderr, "FAIL: indices wrong for '%s'\n", s.c_str());
-            std::fprintf(stderr, " result  ");
-            for ( const auto& r : result.Indices() )
-                fprintf(stderr, " %d", r);
-            fprintf(stderr, "\n");
-
-            std::fprintf(stderr, " expected");
-            for ( const auto& r : *expected )
-                fprintf(stderr, " %d", r);
-            fprintf(stderr, "\n");
-
-            ++errors;
-        }
-    };
-
-    test_parse_cpu("a");
-    test_parse_cpu(",");
-    test_parse_cpu("-");
-    test_parse_cpu(":");
-    test_parse_cpu("1,");
-    test_parse_cpu("1,,2");
-    test_parse_cpu(",2");
-    test_parse_cpu("-2");
-    test_parse_cpu("2-");
-    test_parse_cpu("2-3-");
-    test_parse_cpu("1,2-");
-    test_parse_cpu("3-2");
-    test_parse_cpu("1-2,3-2");
-    test_parse_cpu("1-2:");
-    test_parse_cpu("1-2:0");
-    test_parse_cpu("1-2:-2");
-    test_parse_cpu("1:");
-    test_parse_cpu("1:0");
-    test_parse_cpu("1:1");
-    test_parse_cpu("1-2:1:2");
-    test_parse_cpu("1-2:1:");
-    test_parse_cpu("1-2::1::");
-    test_parse_cpu("1-2:1::");
-
-    test_parse_cpu("", std::vector<int>{});
-    test_parse_cpu("1", {{1}});
-    test_parse_cpu("3,2,2,4", {{3, 2, 2, 4}});
-    test_parse_cpu("1-4", {{1, 2, 3, 4}});
-    test_parse_cpu("1,3-5", {{1, 3, 4, 5}});
-    test_parse_cpu("1-5:2", {{1, 3, 5}});
-    test_parse_cpu("9,10-12:1,18-24:2,19-22:3", {{9, 10, 11, 12, 18, 20, 22, 24, 19, 22}});
-    test_parse_cpu("0-8:2,10-20:3", {{0, 2, 4, 6, 8, 10, 13, 16, 19}});
-
-    if ( errors > 0 )
-        std::exit(1);
 }
 
 } // namespace zeek::detail

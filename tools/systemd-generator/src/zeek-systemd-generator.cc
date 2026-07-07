@@ -67,7 +67,7 @@ void systemd_add_environment(Unit& unit, const ZeekClusterConfig& config, std::s
                              const std::map<std::string, std::string>& vars = {}) {
     // Write out all Environment variables from the global env and worker_env options.
     for ( const auto& env : std::array{config.Env(), custom_env} | std::views::join ) {
-        auto value = config.SubstituteVars(env.Value(), vars);
+        auto value = zeek::detail::substitute_vars(env.Value(), vars);
         if ( ! value ) {
             std::fprintf(stderr, "worker_env substitution for '%s' failed of '%s'\n", env.Value().c_str(),
                          env.Key().c_str());
@@ -294,7 +294,7 @@ void systemd_write_units(const path& dir, const ZeekClusterConfig& config) {
             if ( ! iwc.Tag().empty() )
                 vars["interface_tag"] = iwc.Tag();
 
-            auto interface = config.SubstituteVars(iwc.Interface(), vars);
+            auto interface = zeek::detail::substitute_vars(iwc.Interface(), vars);
             if ( ! interface.has_value() ) {
                 std::fprintf(stderr, "interface substitution for '%s' failed\n", iwc.Interface().c_str());
                 std::exit(1);
@@ -346,8 +346,6 @@ void systemd_write_units(const path& dir, const ZeekClusterConfig& config) {
 } // namespace
 
 int main(int argc, const char* argv[]) {
-    ZeekClusterConfig::RunUnitTests();
-
     const char* program = argv[0]; // We fiddle with argv later on, keep the program name around.
     bool explicit_config = false;  // Did the user provide --config ?
 

@@ -18,8 +18,45 @@
 
 namespace zeek::detail {
 
+/**
+ *Split \a v by \a delim into a vector of string views.
+ */
+std::vector<std::string_view> split(std::string_view v, char delim);
 
+/**
+ * " ".join(...) in C++, meh.
+ */
 std::string join(std::span<const std::string> args, const std::string& sep = " ");
+
+/**
+ * Replace \a s with with all occurrences of ${var} replaced with the values of var in the map \a vars.
+ */
+std::optional<std::string> substitute_vars(const std::string& s, const std::map<std::string, std::string>& vars);
+
+class Section;
+
+/**
+ * Parses \a content as ini-like format, returning vector of Section instances
+ * or a vector of error messages.
+ *
+ * Options not preceded by a [section] are placed into an unnamed section that
+ * has an empty string as the name. This will be the first entry in the returned
+ * list of sections. Zeek's config format either requires all options to exist
+ * in the unnamed section, or only in sections, but not mixed.
+ *
+ * This parser supports multi-value options by recognizing continuation lines
+ * and inserting every line as a separate value to support things like environment
+ * variables.
+ *
+ * worker_env =
+ *   key1=val1
+ *   key2=val2
+ *
+ * @param content The full content of zeek.conf as a string.
+ *
+ * @return Parsed sections and a vector of errors. If any errors occurred, do not work with the sections.
+ */
+std::pair<std::vector<Section>, std::vector<std::string>> parse_ini_like(const std::string& content);
 
 class ZeekClusterConfig;
 
@@ -417,14 +454,6 @@ public:
      * Generate a command string for the zeek-archiver.
      */
     std::string ArchiverCommand() const;
-
-    /**
-     * @return A new string with with all occurrences of ${var} in \a s replaced with values from \a vars.
-     */
-    static std::optional<std::string> SubstituteVars(const std::string& s,
-                                                     const std::map<std::string, std::string>& vars);
-
-    static void RunUnitTests();
 
 private:
     friend ZeekClusterConfig parse_config(const std::filesystem::path&, const std::filesystem::path&);
