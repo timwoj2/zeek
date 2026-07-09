@@ -20,4 +20,20 @@ redef Cluster::nodes += {
 redef Cluster::manager_is_logger = F;
 
 @load base/frameworks/telemetry/options
+
+# Either use ZEEK_TELEMETRY_LISTEN_ADDRESS env or the value from node$ip.
+const metrics_address_env = getenv("ZEEK_TELEMETRY_LISTEN_ADDRESS");
+@if ( |metrics_address_env| > 0 )
+redef Telemetry::metrics_address = metrics_address_env;
+@else
+@if ( Cluster::node in Cluster::nodes )
+const my_ip = Cluster::nodes[Cluster::node]$ip;
+# Need to quote IPv6 by hand... strange...
+const my_ip_str = is_v4_addr(my_ip) ? cat(my_ip) : cat("[", my_ip, "]");
+redef Telemetry::metrics_address = my_ip_str;
+@endif
+@endif
+
+# Always use the metrics port from the cluster layout for now
+# This can/may change in the future!
 redef Telemetry::metrics_port = Cluster::local_node_metrics_port();

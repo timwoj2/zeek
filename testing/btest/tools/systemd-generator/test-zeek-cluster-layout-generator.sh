@@ -18,3 +18,8 @@
 # @TEST-EXEC: ${BUILD}/tools/systemd-generator/zeek-cluster-layout-generator -L 3 -P 5 -W '1:2 2:2' -a 127.0.2.1 -b 10.0.0.1 -o cluster-layout-zeekctl.zeek
 # @TEST-EXEC: zeek ./cluster-layout-zeekctl.zeek
 # @TEST-EXEC: btest-diff cluster-layout-zeekctl.zeek
+#
+# Disable metrics by using port 0
+# @TEST-EXEC: ${BUILD}/tools/systemd-generator/zeek-cluster-layout-generator -m 0 -o cluster-layout-no-metrics.zeek
+# @TEST-EXEC: zeek ./cluster-layout-no-metrics.zeek
+# @TEST-EXEC: btest-diff cluster-layout-no-metrics.zeek
