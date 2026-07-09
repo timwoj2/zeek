@@ -13,7 +13,7 @@ Type=exec
 User=test-zeek-user
 Group=test-zeek-group
 WorkingDirectory=<...>/logger-%i
-ReadWritePaths=<...>/logger-%i <...>/var 
+ReadWritePaths=<...>/logger-%i <...>/var
 Nice=-3
 MemoryMax=2001000K
 Environment=PATH=<...>/bin:<...>/bin:<...>/bin:/bin

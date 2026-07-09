@@ -16,7 +16,7 @@ Type=exec
 User=zeek
 Group=zeek
 WorkingDirectory=<...>/worker-eth0-%i
-ReadWritePaths=<...>/worker-eth0-%i 
+ReadWritePaths=<...>/worker-eth0-%i
 CapabilityBoundingSet=CAP_NET_RAW
 AmbientCapabilities=CAP_NET_RAW
 Environment=PATH=<...>/bin:<...>/bin:<...>/bin:/bin

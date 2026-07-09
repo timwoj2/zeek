@@ -14,7 +14,7 @@ Type=exec
 User=zeek
 Group=zeek
 WorkingDirectory=<...>/manager
-ReadWritePaths=<...>/manager 
+ReadWritePaths=<...>/manager
 Environment=PATH=<...>/mybin:<...>/mybin2:<...>/bin:<...>/bin:<...>/bin:/bin
 Environment=ZEEKPATH=<...>/generated-scripts:<...>/zeek:<...>/policy:<...>/site:<...>/builtin-plugins
 Environment=CLUSTER_NODE=manager

@@ -14,7 +14,7 @@ Type=exec
 User=test-zeek-user
 Group=test-zeek-group
 WorkingDirectory=<...>/manager
-ReadWritePaths=<...>/manager 
+ReadWritePaths=<...>/manager
 Nice=-1
 MemoryMax=2001M
 Environment=PATH=<...>/bin:<...>/bin:<...>/bin:/bin

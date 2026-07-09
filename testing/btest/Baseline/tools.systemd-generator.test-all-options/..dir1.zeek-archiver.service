@@ -12,7 +12,7 @@ Type=exec
 User=zeek
 Group=zeek
 WorkingDirectory=
-ReadWritePaths=<...>/log-queue <...>/zeek 
+ReadWritePaths=<...>/log-queue <...>/zeek
 Environment=GLOBAL_ENV=1
 Environment=LD_PRELOAD=<...>/libjemalloc.so
 Environment=I_AM_ARCHIVER=1

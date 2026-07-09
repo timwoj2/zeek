@@ -14,7 +14,7 @@ Type=exec
 User=zeek
 Group=zeek
 WorkingDirectory=<...>/proxy-%i
-ReadWritePaths=<...>/proxy-%i 
+ReadWritePaths=<...>/proxy-%i
 Environment=PATH=<...>/bin:<...>/bin:<...>/bin:/bin
 Environment=ZEEKPATH=<...>/generated-scripts:<...>/zeek:<...>/policy:<...>/site:<...>/builtin-plugins
 Environment=CLUSTER_NODE=c-mgr-proxy-%i
