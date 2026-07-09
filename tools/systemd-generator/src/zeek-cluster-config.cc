@@ -680,10 +680,17 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
             config.metrics_address = option.Value();
         }
         else if ( key == "archiver" ) {
-            config.enable_archiver = validate_bool(option);
+            config.archiver_option = option.Value();
         }
         else if ( key == "archiver_args" ) {
             config.archiver_args = option.JoinedValues();
+        }
+        else if ( key == "archiver_env" ) {
+            auto [env, error] = option.AsEnvVars();
+            if ( error.empty() )
+                config.archiver_env = std::move(env);
+            else
+                config.Error("error in proxy_env: " + error);
         }
         else if ( key == "manager_nice" ) {
             config.nice_manager = validate_nice(option);
@@ -827,13 +834,26 @@ std::string ZeekClusterConfig::ClusterLayoutCommand() const {
 }
 
 std::string ZeekClusterConfig::ArchiverCommand() const {
-    std::filesystem::path archiver_exe = ZeekBaseDir() / "bin" / "zeek-archiver";
-    std::vector<std::string> cmd_args = {
-        archiver_exe.string(),
-        ArchiverArgs(),
-        LogQueueDir().string(),
-        LogArchiveDir().string(),
-    };
+    if ( archiver_option == "0" )
+        throw std::logic_error("ArchiverCommand() called but archiver_option is 0");
+
+    std::vector<std::string> cmd_args;
+
+    if ( archiver_option == "1" ) {
+        std::filesystem::path archiver_exe = ZeekBaseDir() / "bin" / "zeek-archiver";
+        cmd_args = {
+            archiver_exe.string(),
+            ArchiverArgs(),
+            LogQueueDir().string(),
+            LogArchiveDir().string(),
+        };
+    }
+    else {
+        cmd_args = {
+            archiver_option,
+            ArchiverArgs(),
+        };
+    }
 
     return join(cmd_args);
 }

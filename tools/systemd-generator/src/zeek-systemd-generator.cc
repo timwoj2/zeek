@@ -334,6 +334,8 @@ void systemd_write_units(const path& dir, const ZeekClusterConfig& config) {
         archiver_unit.SetRestart("always");
         archiver_unit.SetRestartSec(config.RestartIntervalSec());
 
+        systemd_add_environment(archiver_unit, config, config.ArchiverEnv());
+
         archiver_unit.SetSlice("zeek-archiver.slice");
 
         archiver_unit.Write();

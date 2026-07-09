@@ -397,6 +397,7 @@ public:
     std::span<const EnvVar> ManagerEnv() const { return std::span{manager_env}; }
     std::span<const EnvVar> LoggerEnv() const { return std::span{logger_env}; }
     std::span<const EnvVar> ProxyEnv() const { return std::span{proxy_env}; }
+    std::span<const EnvVar> ArchiverEnv() const { return std::span{archiver_env}; }
 
     /**
      * @return The value of the cluster backend arguments.
@@ -428,7 +429,7 @@ public:
     /**
      * @return Whether to run zeek-archiver.
      */
-    bool IsArchiverEnabled() const { return enable_archiver; }
+    bool IsArchiverEnabled() const { return archiver_option != "0"; }
 
     /**
      * @return Additional argument for the zeek-archiver.
@@ -452,6 +453,10 @@ public:
 
     /**
      * Generate a command string for the zeek-archiver.
+     *
+     * If the archiver option is 1, uses <zeek_base_dir>/bin/zeek-archiver
+     * and appends archiver_args and log queue and archive directories. Otherwise,
+     * uses the option as executable and appends archiver_args only.
      */
     std::string ArchiverCommand() const;
 
@@ -512,8 +517,9 @@ private:
 
     int restart_interval_sec = 1;
 
-    bool enable_archiver = true;
+    std::string archiver_option = "1"; // 1, 0 or path to a custom archiver command.
     std::string archiver_args;
+    std::vector<EnvVar> archiver_env;
 
     std::filesystem::path cluster_layout_generator;
 
