@@ -14,6 +14,7 @@ User=zeek
 Group=zeek
 WorkingDirectory=<...>/logger-%i
 ReadWritePaths=<...>/logger-%i <...>/var
+CPUAffinity=0,1
 MemoryMax=512M
 Environment=PATH=<...>/bin:<...>/bin:<...>/bin:/bin
 Environment=ZEEKPATH=<...>/generated-scripts:<...>/zeek:<...>/policy:<...>/site:<...>/builtin-plugins

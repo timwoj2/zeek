@@ -148,9 +148,12 @@ void systemd_write_units(const path& dir, const ZeekClusterConfig& config) {
         manager_unit.AddReadWritePath(config.WorkingDirectory("manager"));
         manager_unit.AddAfter("zeek-logger@.service");
         manager_unit.SetSlice("zeek-manager.slice");
-        manager_unit.SetMemoryMax(config.MemoryMaxFor("manager"));
-        if ( auto nice = config.NiceFor("manager"); nice )
+        if ( auto memory_max = config.ManagerMemoryMax(); memory_max )
+            manager_unit.SetMemoryMax(*memory_max);
+        if ( auto nice = config.ManagerNice(); nice )
             manager_unit.SetNice(*nice);
+        if ( auto cpuset = config.ManagerCpuSet(); cpuset )
+            manager_unit.SetCpuAffinity(cpuset->IndicesSetString());
         systemd_add_environment(manager_unit, config, config.ManagerEnv());
         manager_unit.Write();
 
@@ -174,9 +177,12 @@ void systemd_write_units(const path& dir, const ZeekClusterConfig& config) {
     // We could also mark certain paths read-only if that's an issue.
     logger_unit.AddReadWritePath(config.ZeekBaseDir() / "var");
     logger_unit.SetSlice("zeek-loggers.slice");
-    logger_unit.SetMemoryMax(config.MemoryMaxFor("logger"));
-    if ( auto nice = config.NiceFor("logger"); nice )
+    if ( auto memory_max = config.LoggerMemoryMax(); memory_max )
+        logger_unit.SetMemoryMax(*memory_max);
+    if ( auto nice = config.LoggerNice(); nice )
         logger_unit.SetNice(*nice);
+    if ( auto cpuset = config.LoggerCpuSet(); cpuset )
+        logger_unit.SetCpuAffinity(cpuset->IndicesSetString());
     systemd_add_environment(logger_unit, config, config.LoggerEnv());
     logger_unit.Write();
 
@@ -197,9 +203,12 @@ void systemd_write_units(const path& dir, const ZeekClusterConfig& config) {
     proxy_unit.AddReadWritePath(config.WorkingDirectory("proxy-%i"));
     proxy_unit.AddAfter("zeek-logger@.service");
     proxy_unit.SetSlice("zeek-proxies.slice");
-    proxy_unit.SetMemoryMax(config.MemoryMaxFor("proxy"));
-    if ( auto nice = config.NiceFor("proxy"); nice )
+    if ( auto memory_max = config.ProxyMemoryMax(); memory_max )
+        proxy_unit.SetMemoryMax(*memory_max);
+    if ( auto nice = config.ProxyNice(); nice )
         proxy_unit.SetNice(*nice);
+    if ( auto cpuset = config.ProxyCpuSet(); cpuset )
+        proxy_unit.SetCpuAffinity(cpuset->IndicesSetString());
     systemd_add_environment(proxy_unit, config, config.ProxyEnv());
     proxy_unit.Write();
 
@@ -252,7 +261,8 @@ void systemd_write_units(const path& dir, const ZeekClusterConfig& config) {
         worker_interface_unit.SetAmbientCapabilities("CAP_NET_RAW");
         worker_interface_unit.SetCapabilityBoundingSet("CAP_NET_RAW");
         worker_interface_unit.SetSlice("zeek-workers.slice");
-        worker_interface_unit.SetMemoryMax(iwc.WorkerMemoryMax());
+        if ( auto memory_max = iwc.MemoryMax(); memory_max )
+            worker_interface_unit.SetMemoryMax(*memory_max);
         if ( auto nice = iwc.Nice(); nice )
             worker_interface_unit.SetNice(*nice);
 
@@ -333,6 +343,13 @@ void systemd_write_units(const path& dir, const ZeekClusterConfig& config) {
 
         archiver_unit.SetRestart("always");
         archiver_unit.SetRestartSec(config.RestartIntervalSec());
+
+        if ( auto memory_max = config.ArchiverMemoryMax(); memory_max )
+            archiver_unit.SetMemoryMax(*memory_max);
+        if ( auto nice = config.ArchiverNice(); nice )
+            archiver_unit.SetNice(*nice);
+        if ( auto cpuset = config.ArchiverCpuSet(); cpuset )
+            archiver_unit.SetCpuAffinity(cpuset->IndicesSetString());
 
         systemd_add_environment(archiver_unit, config, config.ArchiverEnv());
 

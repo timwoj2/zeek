@@ -23,7 +23,6 @@ namespace {
 
 using zeek::detail::Option;
 using zeek::detail::Section;
-using zeek::detail::split;
 
 void ltrim(std::string& s) {
     s.erase(s.begin(), std::ranges::find_if(s.begin(), s.end(), [](unsigned char ch) { return ! std::isspace(ch); }));
@@ -382,6 +381,17 @@ CpuList::CpuList(const std::string& list) {
     }
 }
 
+std::string CpuList::IndicesSetString(const std::string& sep) const {
+    std::set<int> cpus_set{cpus.begin(), cpus.end()};
+    std::vector cpus_vec(cpus_set.begin(), cpus_set.end());
+    std::sort(cpus_vec.begin(), cpus_vec.end());
+    std::vector<std::string> cpus_str_vec;
+    cpus_str_vec.reserve(cpus_vec.size());
+    for ( auto i : cpus_vec )
+        cpus_str_vec.emplace_back(std::to_string(i));
+    return join(cpus_str_vec, sep);
+}
+
 std::pair<InterfaceWorkerConfig, std::string> zeek::detail::InterfaceWorkerConfig::from_section(
     const Section& section, bool allow_unknown_options) {
     auto section_name = section.Name();
@@ -589,6 +599,9 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
         else if ( key == "proxy_args" ) {
             config.proxy_args = option.JoinedValues();
         }
+        else if ( key == "archiver_args" ) {
+            config.archiver_args = option.JoinedValues();
+        }
         else if ( key == "env" ) {
             auto [env, error] = option.AsEnvVars();
             if ( error.empty() )
@@ -617,6 +630,13 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
             else
                 config.Error("error in proxy_env: " + error);
         }
+        else if ( key == "archiver_env" ) {
+            auto [env, error] = option.AsEnvVars();
+            if ( error.empty() )
+                config.archiver_env = std::move(env);
+            else
+                config.Error("error in proxy_env: " + error);
+        }
         else if ( key == "user" ) {
             config.user = option.Value();
         }
@@ -631,6 +651,13 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
             else
                 config.Error("invalid manager value: '" + option.Value() + "'");
         }
+        else if ( key == "loggers" ) {
+            auto result = parse_int(option.Value());
+            if ( result && result >= 0 )
+                config.loggers = *result;
+            else
+                config.Error("invalid loggers value: '" + option.Value() + "'");
+        }
         else if ( key == "proxies" ) {
             auto result = parse_int(option.Value());
             if ( result && *result >= 0 )
@@ -638,12 +665,8 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
             else
                 config.Error("invalid proxies value: '" + option.Value() + "'");
         }
-        else if ( key == "loggers" ) {
-            auto result = parse_int(option.Value());
-            if ( result && result >= 0 )
-                config.loggers = *result;
-            else
-                config.Error("invalid loggers value: '" + option.Value() + "'");
+        else if ( key == "archiver" ) {
+            config.archiver_option = option.Value();
         }
         else if ( key == "base_dir" ) {
             if ( ! option.Value().empty() )
@@ -679,36 +702,49 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
         else if ( key == "metrics_address" ) {
             config.metrics_address = option.Value();
         }
-        else if ( key == "archiver" ) {
-            config.archiver_option = option.Value();
-        }
-        else if ( key == "archiver_args" ) {
-            config.archiver_args = option.JoinedValues();
-        }
-        else if ( key == "archiver_env" ) {
-            auto [env, error] = option.AsEnvVars();
-            if ( error.empty() )
-                config.archiver_env = std::move(env);
-            else
-                config.Error("error in proxy_env: " + error);
-        }
         else if ( key == "manager_nice" ) {
-            config.nice_manager = validate_nice(option);
+            config.manager_nice = validate_nice(option);
         }
         else if ( key == "logger_nice" ) {
-            config.nice_logger = validate_nice(option);
+            config.logger_nice = validate_nice(option);
         }
         else if ( key == "proxy_nice" ) {
-            config.nice_proxy = validate_nice(option);
+            config.proxy_nice = validate_nice(option);
+        }
+        else if ( key == "archiver_nice" ) {
+            config.archiver_nice = validate_nice(option);
         }
         else if ( key == "manager_memory_max" ) {
-            config.memory_max_manager = validate_memory_max(option);
+            config.manager_memory_max = validate_memory_max(option);
         }
         else if ( key == "logger_memory_max" ) {
-            config.memory_max_logger = validate_memory_max(option);
+            config.logger_memory_max = validate_memory_max(option);
         }
         else if ( key == "proxy_memory_max" ) {
-            config.memory_max_proxy = validate_memory_max(option);
+            config.proxy_memory_max = validate_memory_max(option);
+        }
+        else if ( key == "archiver_memory_max" ) {
+            config.archiver_memory_max = validate_memory_max(option);
+        }
+        else if ( key == "manager_cpu_set" ) {
+            config.manager_cpu_set = CpuList(option.Value());
+            if ( ! config.manager_cpu_set->IsValid() )
+                config.Error("invalid manager_cpu_set");
+        }
+        else if ( key == "logger_cpu_set" ) {
+            config.logger_cpu_set = CpuList(option.Value());
+            if ( ! config.logger_cpu_set->IsValid() )
+                config.Error("invalid loggers_cpu_set");
+        }
+        else if ( key == "proxy_cpu_set" ) {
+            config.proxy_cpu_set = CpuList(option.Value());
+            if ( ! config.proxy_cpu_set->IsValid() )
+                config.Error("invalid proxies_cpu_set");
+        }
+        else if ( key == "archiver_cpu_set" ) {
+            config.archiver_cpu_set = CpuList(option.Value());
+            if ( ! config.archiver_cpu_set->IsValid() )
+                config.Error("invalid archiver_cpu_set");
         }
         else if ( key == "restart_interval_sec" ) {
             config.restart_interval_sec = std::atoi(option.Value().c_str());
@@ -727,10 +763,10 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
     if ( config.cluster_backend_args.empty() )
         config.cluster_backend_args = "frameworks/cluster/backend/zeromq";
 
-    // If this is a cluster configuration, but no explicit cluster_node_prefix set,
-    // use the hostname from the config file.
-    if ( config.IsInClusterDir() && ! config.cluster_node_prefix.has_value() )
-        config.cluster_node_prefix = config.SourcePath().stem().stem();
+    // If this is a cluster configuration, but no explicit cluster_node_prefix set
+    // in the configuration,  use the hostname part of the filename.
+    if ( ! config.cluster_node_prefix.has_value() && config.HasFilenameHost() )
+        config.cluster_node_prefix = config.FilenameHost();
 
     // Default to local if args is empty - not sure if this is so clever.
     if ( config.args.empty() )
@@ -742,20 +778,20 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
     return config;
 }
 
-bool ZeekClusterConfig::IsInClusterDir() const {
-    // Example: xxx/cluster/host.zeek.conf
+bool ZeekClusterConfig::HasFilenameHost() const {
+    // Example: xxx/cluster/<hostname>.zeek.conf
     auto ext1 = source_path.extension();
     auto ext2 = source_path.stem().extension();
-    auto parent = source_path.parent_path().filename();
-    return parent == "cluster" && ext1 == ".conf" && ext2 == ".zeek";
+    auto host = source_path.stem().stem();
+    return ! host.empty() && ext2 == ".zeek" && ext1 == ".conf";
 }
 
-std::filesystem::path ZeekClusterConfig::ClusterDir() const {
-    // Just some sanity checking.
-    if ( ! IsInClusterDir() )
-        throw std::logic_error("Do not call ClusterDir() for non-cluster config");
+std::string ZeekClusterConfig::FilenameHost() const {
+    // Example: xxx/cluster/host.zeek.conf
+    if ( ! HasFilenameHost() )
+        throw std::logic_error("Do not call FilenameHost() if ! HasFilenameHost()");
 
-    return source_path.parent_path();
+    return source_path.stem().stem();
 }
 
 std::string ZeekClusterConfig::ClusterLayoutCommand() const {
@@ -775,11 +811,11 @@ std::string ZeekClusterConfig::ClusterLayoutCommand() const {
     // If this configuration is coming from /etc/zeek/cluster, use
     // the zeek-cluster-layout-generator executable's -C argument to
     // pass the directory.
-    if ( IsInClusterDir() ) {
+    if ( HasFilenameHost() ) {
         std::vector<std::string> cmd_args = {
             cluster_layout_generator.string(),
             "-C",
-            ClusterDir(),
+            Directory(),
             "-o",
             (GeneratedScriptsDir() / "cluster-layout.zeek").string(),
         };
@@ -891,32 +927,6 @@ std::string ZeekClusterConfig::Path() const {
     result += BinDir().string() + ":";
 
     return result + path;
-}
-
-std::optional<int> ZeekClusterConfig::NiceFor(const std::string& node) const {
-    if ( node == "manager" )
-        return nice_manager;
-    else if ( node.starts_with("logger") )
-        return nice_logger;
-    else if ( node.starts_with("proxy") )
-        return nice_proxy;
-
-    std::fprintf(stderr, "invalid node '%s' in NiceFor()\n", node.c_str());
-    return std::nullopt;
-}
-
-const std::string& ZeekClusterConfig::MemoryMaxFor(const std::string& node) const {
-    if ( node == "manager" )
-        return memory_max_manager;
-    else if ( node.starts_with("logger") )
-        return memory_max_logger;
-    else if ( node.starts_with("proxy") )
-        return memory_max_proxy;
-    else if ( node.starts_with("worker") )
-        return memory_max_worker;
-
-    std::fprintf(stderr, "invalid node '%s' in MemoryMaxFor()\n", node.c_str());
-    abort();
 }
 
 std::optional<std::string> gethostname() {

@@ -19,7 +19,6 @@ redef Telemetry::metrics_address = metrics_address_env;
 @else
 @if ( Cluster::node in Cluster::nodes )
 const my_ip = Cluster::nodes[Cluster::node]$ip;
-# Need to quote IPv6 by hand... strange...
 const my_ip_str = is_v4_addr(my_ip) ? cat(my_ip) : cat("[", my_ip, "]");
 redef Telemetry::metrics_address = my_ip_str;
 @endif

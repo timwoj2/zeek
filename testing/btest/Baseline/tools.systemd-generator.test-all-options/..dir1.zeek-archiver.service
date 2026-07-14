@@ -13,6 +13,9 @@ User=zeek
 Group=zeek
 WorkingDirectory=
 ReadWritePaths=<...>/log-queue <...>/zeek
+CPUAffinity=1,2,3,4
+Nice=3
+MemoryMax=64M
 Environment=GLOBAL_ENV=1
 Environment=LD_PRELOAD=<...>/libjemalloc.so
 Environment=I_AM_ARCHIVER=1

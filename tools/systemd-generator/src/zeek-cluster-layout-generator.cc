@@ -4,7 +4,7 @@
 // and multi-host Zeek deployments. Workers do not get ports allocated.
 // Supports the multi-host use-case via -C /etc/zeek/cluster and will assemble
 // a cluster-layout based on per-host <hostname>.zeek.conf files in the given
-// directory. You must name the directory "cluster". That's the convention.
+// directory.
 //
 // For the single host use-case, expects the individual process counts as
 // individual arguments, or passing it a /etc/zeek/zeek.conf via -C.
@@ -116,7 +116,6 @@ public:
         lines.emplace_back("@else");
         lines.emplace_back("@if ( Cluster::node in Cluster::nodes )");
         lines.emplace_back("const my_ip = Cluster::nodes[Cluster::node]$ip;");
-        lines.emplace_back("# Need to quote IPv6 by hand... strange...");
         lines.emplace_back("const my_ip_str = is_v4_addr(my_ip) ? cat(my_ip) : cat(\"[\", my_ip, \"]\");");
         lines.emplace_back("redef Telemetry::metrics_address = my_ip_str;");
         lines.emplace_back("@endif");
@@ -147,9 +146,14 @@ public:
         // Slight hack for the manager_is_logger redef.
         if ( type == "LOGGER" )
             ++total_loggers;
+
+        if ( type == "MANAGER" )
+            ++total_managers;
     }
 
     /**
+     * Helper to add workers using the ClusterLayoutOptions.
+     *
      * Workers is either just the number of workers, or a "tag1:worker1 tag2:workers2 tag3:workers3"
      * that allows to have worker-{tag}-{index} style names.
      */
@@ -191,13 +195,16 @@ public:
         }
     }
 
-    void Print(std::ostream& out) {
+    void Print(std::ostream& out) const {
         for ( const auto& l : lines )
             out << l << "\n";
     }
 
+    int TotalManagers() const noexcept { return total_managers; }
+
 private:
     int total_loggers = 0;
+    int total_managers = 0;
     std::vector<std::string> lines;
 };
 
@@ -216,7 +223,7 @@ void usage(const char* prog) {
 int main(int argc, char* argv[]) {
     ClusterLayoutOptions opts;
 
-    std::string config_or_cluster = "";
+    std::string config_file_or_cluster_dir = "";
     std::string out = "-";
     opterr = 0;
 
@@ -226,7 +233,7 @@ int main(int argc, char* argv[]) {
             break;
 
         switch ( c ) {
-            case 'C': config_or_cluster = optarg; break;
+            case 'C': config_file_or_cluster_dir = optarg; break;
             case 'L': opts.loggers = checked_stoi(c, optarg); break;
             case 'P': opts.proxies = checked_stoi(c, optarg); break;
             case 'W': opts.workers = optarg; break;
@@ -242,8 +249,8 @@ int main(int argc, char* argv[]) {
 
     ClusterLayout layout;
 
-    if ( config_or_cluster.empty() ) {
-        // Include all nodes in the given ClusterLayoutOptions.
+    if ( config_file_or_cluster_dir.empty() ) {
+        // Explicit parameters.
         layout.AddNode("manager", "MANAGER", opts.address, opts.NextMetricsPort(), opts.NextPort());
 
         for ( int i = 1; i <= opts.loggers; i++ ) {
@@ -258,9 +265,10 @@ int main(int argc, char* argv[]) {
         layout.AddWorkers(opts);
     }
     else {
+        // -C was used to select either a configuration file, or a cluster directory.
         std::vector<std::filesystem::path> fnames;
 
-        if ( std::filesystem::is_directory(config_or_cluster) ) {
+        if ( std::filesystem::is_directory(config_file_or_cluster_dir) ) {
             // If the -C argument is a directory, parse all configuration files from it
             // and assemble a cluster layout. Configs need to strictly match <hostname>.zeek.conf
             // within the directory.
@@ -274,30 +282,32 @@ int main(int argc, char* argv[]) {
             // parsing behaves differently (specifically node prefixing).
             std::regex re_conf("[a-z0-9][-a-z0-9_]*\\.zeek\\.conf$");
 
-            auto dir = std::filesystem::path(config_or_cluster);
+            auto dir = std::filesystem::path(config_file_or_cluster_dir);
             if ( dir.filename().empty() ) // strip trailing slash, can only be one.
                 dir = dir.parent_path();
 
-            if ( dir.filename() != "cluster" ) {
-                std::fprintf(stderr, "directory given to -C must end in cluster/\n");
-                std::exit(1);
-            }
 
-
-            for ( const auto& fname : std::filesystem::directory_iterator(config_or_cluster) ) {
+            for ( const auto& fname : std::filesystem::directory_iterator(dir) ) {
                 if ( std::regex_match(fname.path().filename().string(), re_conf) )
                     fnames.emplace_back(fname);
             }
+
+            if ( fnames.empty() ) {
+                std::fprintf(stderr, "no <hostname>.zeek.conf files in %s found\n", config_file_or_cluster_dir.c_str());
+                std::exit(1);
+            }
         }
-        else if ( std::filesystem::is_regular_file(config_or_cluster) ) {
+        else if ( std::filesystem::is_regular_file(config_file_or_cluster_dir) ) {
             // If it's just a file, do the same.
-            fnames.emplace_back(config_or_cluster);
+            fnames.emplace_back(config_file_or_cluster_dir);
         }
         else {
-            std::fprintf(stderr, "neither file nor directory: %s\n", config_or_cluster.c_str());
+            std::fprintf(stderr, "neither file nor directory: %s\n", config_file_or_cluster_dir.c_str());
             std::exit(1);
         }
 
+
+        // Make processing order predictable.
         std::sort(fnames.begin(), fnames.end());
 
         for ( const auto& fname : fnames ) {
@@ -344,6 +354,12 @@ int main(int argc, char* argv[]) {
                                    next_metrics_port());
                 }
             }
+        }
+
+        if ( layout.TotalManagers() > 1 ) {
+            fprintf(stderr, "too many manager nodes (%d) from %s\n", layout.TotalManagers(),
+                    config_file_or_cluster_dir.c_str());
+            std::exit(1);
         }
     }
 

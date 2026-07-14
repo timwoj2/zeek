@@ -36,6 +36,7 @@ cluster_backend_args =
 
 ## Manager configuration
 manager = 1
+manager_cpu_set = 1-12
 manager_memory_max = 1024M
 manager_args =
   loaded-by-manager-first
@@ -48,6 +49,7 @@ manager_env =
 ## Logger configuration
 loggers = 3
 logger_memory_max = 512M
+logger_cpu_set = 0,1
 logger_args =
   loaded-by-logger-1
   loaded-by-logger-2
@@ -58,6 +60,7 @@ logger_env =
 ## Proxy configuration
 proxies = 5
 proxy_memory_max = 1024M
+proxy_cpu_set = 7,8
 proxy_args =
   loaded-by-proxy-1
   loaded-by-proxy-2
@@ -67,6 +70,9 @@ proxy_env =
 
 ## Archiver configuration.
 archiver = 1
+archiver_cpu_set = 4,3,2,1
+archiver_memory_max = 64M
+archiver_nice = 3
 archiver_args =
   -i 3
   -d

@@ -99,6 +99,11 @@ public:
      */
     const std::vector<int>& Indices() const { return cpus; }
 
+    /**
+     * @return CPU indices as string separated by \a sep.
+     */
+    std::string IndicesSetString(const std::string& sep = ",") const;
+
 private:
     bool is_valid = true;
     std::vector<int> cpus;
@@ -259,7 +264,7 @@ public:
 
     const std::string& Args() const noexcept { return args; }
 
-    const std::string& WorkerMemoryMax() const noexcept { return memory_max; }
+    const std::optional<std::string>& MemoryMax() const noexcept { return memory_max; }
 
     std::optional<int> Nice() const noexcept { return nice; }
 
@@ -278,7 +283,7 @@ private:
     std::vector<EnvVar> env;
 
     std::optional<int> nice;
-    std::string memory_max;
+    std::optional<std::string> memory_max;
     CpuList cpu_list;
     std::optional<std::string> numa_policy;
 };
@@ -300,14 +305,19 @@ public:
     bool IsValid() const noexcept { return errors.empty(); }
 
     /**
-     * @return true if this config was found in <PREFIX>/etc/zeek/cluster/, rather than <PREFIX>/etc/zeek/
+     * @return true if the config's filename is <hostname>.zeek.conf
      */
-    bool IsInClusterDir() const;
+    bool HasFilenameHost() const;
 
     /**
-     * @return the path to the cluster directory if IsInClusterDir() is true. Just the parent of SourcePath().
+     * @return returns the <hostname> part from <hostname>.zeek.conf
      */
-    std::filesystem::path ClusterDir() const;
+    std::string FilenameHost() const;
+
+    /**
+     * @return The directory where this configuration file lives in.
+     */
+    std::filesystem::path Directory() const { return source_path.parent_path(); }
 
     void Error(std::string msg) { errors.emplace_back(std::move(msg)); }
 
@@ -381,10 +391,6 @@ public:
      */
     std::string ZeekPath() const;
 
-    std::optional<int> NiceFor(const std::string& node) const;
-
-    const std::string& MemoryMaxFor(const std::string& node) const;
-
     /**
      * @return The value of the args configuration.
      */
@@ -398,6 +404,21 @@ public:
     std::span<const EnvVar> LoggerEnv() const { return std::span{logger_env}; }
     std::span<const EnvVar> ProxyEnv() const { return std::span{proxy_env}; }
     std::span<const EnvVar> ArchiverEnv() const { return std::span{archiver_env}; }
+
+    std::optional<CpuList> ManagerCpuSet() const { return manager_cpu_set; }
+    std::optional<CpuList> LoggerCpuSet() const { return logger_cpu_set; }
+    std::optional<CpuList> ProxyCpuSet() const { return proxy_cpu_set; }
+    std::optional<CpuList> ArchiverCpuSet() const { return archiver_cpu_set; }
+
+    std::optional<int> ManagerNice() const { return manager_nice; }
+    std::optional<int> LoggerNice() const { return logger_nice; }
+    std::optional<int> ProxyNice() const { return proxy_nice; }
+    std::optional<int> ArchiverNice() const { return archiver_nice; }
+
+    const std::optional<std::string>& ManagerMemoryMax() const { return manager_memory_max; }
+    const std::optional<std::string>& LoggerMemoryMax() const { return logger_memory_max; }
+    const std::optional<std::string>& ProxyMemoryMax() const { return proxy_memory_max; }
+    const std::optional<std::string>& ArchiverMemoryMax() const { return archiver_memory_max; }
 
     /**
      * @return The value of the cluster backend arguments.
@@ -480,6 +501,10 @@ private:
     std::vector<EnvVar> logger_env;
     std::vector<EnvVar> proxy_env;
 
+    std::optional<CpuList> manager_cpu_set;
+    std::optional<CpuList> logger_cpu_set;
+    std::optional<CpuList> proxy_cpu_set;
+
     std::string user = "zeek";
     std::string group = "zeek";
 
@@ -490,15 +515,17 @@ private:
 
     int start_limit_interval_sec = 0;
 
-    std::optional<int> nice_manager;
-    std::optional<int> nice_logger;
-    std::optional<int> nice_proxy;
-    std::optional<int> nice_worker;
+    std::optional<int> manager_nice;
+    std::optional<int> logger_nice;
+    std::optional<int> proxy_nice;
+    std::optional<int> worker_nice;
+    std::optional<int> archiver_nice;
 
-    std::string memory_max_manager;
-    std::string memory_max_logger;
-    std::string memory_max_proxy;
-    std::string memory_max_worker;
+    std::optional<std::string> manager_memory_max;
+    std::optional<std::string> logger_memory_max;
+    std::optional<std::string> proxy_memory_max;
+    std::optional<std::string> worker_memory_max;
+    std::optional<std::string> archiver_memory_max;
 
     std::vector<InterfaceWorkerConfig> interface_worker_configs;
 
@@ -520,6 +547,7 @@ private:
     std::string archiver_option = "1"; // 1, 0 or path to a custom archiver command.
     std::string archiver_args;
     std::vector<EnvVar> archiver_env;
+    std::optional<CpuList> archiver_cpu_set;
 
     std::filesystem::path cluster_layout_generator;
 
