@@ -469,7 +469,6 @@ public:
     const std::string& ClusterAddress() const { return cluster_address; }
     int ClusterPort() const { return cluster_port; }
 
-    const std::string& MetricsAddress() const { return cluster_address; }
     int MetricsPort() const { return metrics_port; };
 
     /**
@@ -540,7 +539,6 @@ private:
 
     // Metrics
     int metrics_port = 9991;
-    std::string metrics_address = "127.0.0.1";
 
     int restart_interval_sec = 1;
 

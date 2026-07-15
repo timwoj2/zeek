@@ -699,9 +699,6 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
         else if ( key == "metrics_port" ) {
             config.metrics_port = std::atoi(option.Value().c_str());
         }
-        else if ( key == "metrics_address" ) {
-            config.metrics_address = option.Value();
-        }
         else if ( key == "manager_nice" ) {
             config.manager_nice = validate_nice(option);
         }
@@ -861,7 +858,7 @@ std::string ZeekClusterConfig::ClusterLayoutCommand() const {
         "-m",
         std::to_string(metrics_port),
         "-b",
-        metrics_address,
+        cluster_address,
         "-o",
         (GeneratedScriptsDir() / "cluster-layout.zeek").string(),
     };
