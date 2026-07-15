@@ -765,6 +765,10 @@ ZeekClusterConfig parse_config(const std::filesystem::path& default_zeek_base_di
     if ( ! config.cluster_node_prefix.has_value() && config.HasFilenameHost() )
         config.cluster_node_prefix = config.FilenameHost();
 
+    // Single host mode? Use cluster_address 127.0.0.1 if not set.
+    if ( ! config.HasFilenameHost() && config.cluster_address.empty() )
+        config.cluster_address = "127.0.0.1";
+
     // Default to local if args is empty - not sure if this is so clever.
     if ( config.args.empty() )
         config.args = "local";

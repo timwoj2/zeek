@@ -535,7 +535,7 @@ private:
     std::string cluster_backend_args;
 
     int cluster_port = 27760;
-    std::string cluster_address = "127.0.0.1";
+    std::string cluster_address;
 
     // Metrics
     int metrics_port = 9991;
