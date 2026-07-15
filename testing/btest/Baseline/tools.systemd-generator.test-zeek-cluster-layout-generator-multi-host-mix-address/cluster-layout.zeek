@@ -10,24 +10,19 @@ type Host: record {
 const hosts: table[string] of Host &redef;
 
 redef Cluster::hosts += {
-	["mgr"] = [$ip=10.0.0.1],
-	["wkr-1"] = [$ip=10.0.0.2],
-	["wkr-2"] = [$ip=10.0.0.3],
+	["c-mgr"] = [$ip=10.0.0.3],
+	["wkr-1"] = [$ip=(blocking_lookup_hostname("wkr-1") as vector of addr)[0]],
+	["wkr-2"] = [$ip=(blocking_lookup_hostname("wkr-2") as vector of addr)[0]],
 };
 
 redef Cluster::nodes += {
-    ["manager"] = [$node_type=Cluster::MANAGER, $ip=hosts["mgr"]$ip, $p=27760/tcp, $metrics_port=9991/tcp],
-    ["mgr-logger-1"] = [$node_type=Cluster::LOGGER, $ip=hosts["mgr"]$ip, $p=27761/tcp, $manager="manager", $metrics_port=9992/tcp],
-    ["mgr-proxy-1"] = [$node_type=Cluster::PROXY, $ip=hosts["mgr"]$ip, $p=27762/tcp, $manager="manager", $metrics_port=9993/tcp],
-    ["mgr-proxy-2"] = [$node_type=Cluster::PROXY, $ip=hosts["mgr"]$ip, $p=27763/tcp, $manager="manager", $metrics_port=9994/tcp],
+    ["manager"] = [$node_type=Cluster::MANAGER, $ip=hosts["c-mgr"]$ip, $p=27760/tcp, $metrics_port=9991/tcp],
+    ["c-mgr-logger-1"] = [$node_type=Cluster::LOGGER, $ip=hosts["c-mgr"]$ip, $p=27761/tcp, $manager="manager", $metrics_port=9992/tcp],
+    ["c-mgr-proxy-1"] = [$node_type=Cluster::PROXY, $ip=hosts["c-mgr"]$ip, $p=27762/tcp, $manager="manager", $metrics_port=9993/tcp],
     ["wkr-1-worker-1"] = [$node_type=Cluster::WORKER, $ip=hosts["wkr-1"]$ip, $manager="manager", $metrics_port=9991/tcp],
     ["wkr-1-worker-2"] = [$node_type=Cluster::WORKER, $ip=hosts["wkr-1"]$ip, $manager="manager", $metrics_port=9992/tcp],
-    ["wkr-1-worker-3"] = [$node_type=Cluster::WORKER, $ip=hosts["wkr-1"]$ip, $manager="manager", $metrics_port=9993/tcp],
-    ["wkr-1-worker-4"] = [$node_type=Cluster::WORKER, $ip=hosts["wkr-1"]$ip, $manager="manager", $metrics_port=9994/tcp],
     ["wkr-2-worker-1"] = [$node_type=Cluster::WORKER, $ip=hosts["wkr-2"]$ip, $manager="manager", $metrics_port=9991/tcp],
     ["wkr-2-worker-2"] = [$node_type=Cluster::WORKER, $ip=hosts["wkr-2"]$ip, $manager="manager", $metrics_port=9992/tcp],
-    ["wkr-2-worker-3"] = [$node_type=Cluster::WORKER, $ip=hosts["wkr-2"]$ip, $manager="manager", $metrics_port=9993/tcp],
-    ["wkr-2-worker-4"] = [$node_type=Cluster::WORKER, $ip=hosts["wkr-2"]$ip, $manager="manager", $metrics_port=9994/tcp],
 };
 
 redef Cluster::manager_is_logger = F;
