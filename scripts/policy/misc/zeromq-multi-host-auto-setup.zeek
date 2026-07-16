@@ -29,8 +29,16 @@ const xsub_port = fmt("%s/tcp", split_string1(env_xsub_port, /\//)[0]) as port;
 const xsub_port = 5556/tcp;
 @endif
 
+# Guard for when this script is loaded without clustering enabled (mostly tests)
+@if ( "manager" in Cluster::nodes && Cluster::node in Cluster::nodes )
+const my_addr = Cluster::nodes[Cluster::node]$ip;
 const manager_addr = Cluster::nodes["manager"]$ip;
 const manager_addr_uri = addr_to_uri(manager_addr);
+@else
+const my_addr = [::1];
+const manager_addr = [::1];
+const manager_addr_uri = addr_to_uri(manager_addr);
+@endif
 
 # Configure the listening endpoints for the XPUB/XSUB socket on the manager.
 @if ( Cluster::local_node_type() == Cluster::MANAGER )
@@ -45,13 +53,4 @@ redef listen_xsub_endpoint = "";
 redef connect_xpub_endpoint = fmt("tcp://%s:%s", manager_addr_uri, xsub_port as count);
 redef connect_xsub_endpoint = fmt("tcp://%s:%s", manager_addr_uri, xpub_port as count);
 
-const my_addr = Cluster::nodes[Cluster::node]$ip;
 redef ipv6 = is_v6_addr(manager_addr) || is_v6_addr(my_addr);
-
-event zeek_init()
-	{
-	Reporter::info(fmt("connect xpub=%s xsub=%s listen xpub=%s xsub=%s ipv6=%s",
-	                   connect_xpub_endpoint, connect_xsub_endpoint,
-	                   listen_xpub_endpoint, listen_xsub_endpoint,
-	                   ipv6));
-	}

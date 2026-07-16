@@ -20,8 +20,7 @@
 @load frameworks/signatures/iso-9660.zeek
 @load policy/misc/dump-events.zeek
 @load policy/misc/systemd-generator.zeek
-# This expects a populated Cluster::nodes
-# @load policy/misc/zeromq-multi-host-auto-setup.zeek
+@load policy/misc/zeromq-multi-host-auto-setup.zeek
 @load policy/protocols/conn/speculative-service.zeek
 @load policy/protocols/dns/disable-opcode-log-fields.zeek
 
