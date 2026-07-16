@@ -931,7 +931,11 @@ std::string ZeekClusterConfig::Path() const {
 }
 
 std::optional<std::string> gethostname() {
+#ifdef HOST_NAME_MAX
     char buf[HOST_NAME_MAX];
+#else
+    char buf[64];
+#endif
 
     if ( ::gethostname(buf, sizeof(buf)) < 0 ) {
         std::fprintf(stderr, "failed gethostname: %s", ::strerror(errno));
