@@ -147,7 +147,7 @@ protected:
      *
      * @param t type's meta information
      */
-    virtual void hookNewType(const TypeInfo& ti) {}
+    virtual void hookNewType(const TypeInfo& /*t*/) {}
 
     /** Overridden from HILTI driver. */
     void hookNewASTPreCompilation(const hilti::Plugin& plugin, hilti::ASTRoot* root) override;
